@@ -891,6 +891,8 @@ Linux)
 ;;
 esac
 
+LIBS="$LIBS -ldl"
+
 if [ "$bsd" = "yes" ] ; then
   if [ "$darwin" != "yes" ] ; then
     bsd_user="yes"

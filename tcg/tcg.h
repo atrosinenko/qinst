@@ -1090,6 +1090,9 @@ void tcg_op_remove(TCGContext *s, TCGOp *op);
 TCGOp *tcg_op_insert_before(TCGContext *s, TCGOp *op, TCGOpcode opc);
 TCGOp *tcg_op_insert_after(TCGContext *s, TCGOp *op, TCGOpcode opc);
 
+void instrumentation_init(void);
+void instrumentation_shutdown(void);
+void tcg_instrument(TCGContext *s, target_ulong pc);
 void tcg_optimize(TCGContext *s);
 
 TCGv_i32 tcg_const_i32(int32_t val);

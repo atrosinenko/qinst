@@ -706,6 +706,7 @@ void tcg_region_init(void)
         g_assert(!err);
     }
 #endif
+    instrumentation_init();
 }
 
 /*
@@ -3867,6 +3868,7 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb)
     atomic_set(&prof->opt_time, prof->opt_time - profile_getclock());
 #endif
 
+    tcg_instrument(s, tb->pc);
 #ifdef USE_TCG_OPTIMIZATIONS
     tcg_optimize(s);
 #endif
