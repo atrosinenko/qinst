@@ -1,6 +1,6 @@
 QInst is a dynamic instrumentation tool based on [QEMU](https://www.qemu.org/) and supposed to perform trivial instrumentation with trivial code. It inserts snippets of code before the specified ops of QEMU internal representation. To achieve this, it takes arbitrary `plugin.so` with native code of the instrumenter run-time as well as little `plugin-bpf.a` with specially named functions that are hooked to QEMU internal ops. This allows to very easily hook into deep internals of QEMU between the disasm/codegen and dead code elimination/optimization logic.
 
-This software is at the very early development stage, still it is already able to run instrumentation of [AFL](http://lcamtuf.coredump.cx/afl/) though at low speed because of the fact it does not communicate the translated TBs to the forkserver. This should be quite easily fixable, maybe it is already fixed and I just forget to fix this description. ;)
+This software is at the very early development stage, still it is already able to run instrumentation of [AFL](http://lcamtuf.coredump.cx/afl/).
 
 The AFL instrumentation looks like the following (this is the actual working example):
 ```cpp

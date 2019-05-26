@@ -10,6 +10,12 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <dlfcn.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <syscall.h>
+#include <string.h>
+
 
 #define MAP_SIZE 65536
 uint8_t start_buf[MAP_SIZE];
@@ -18,14 +24,48 @@ uint64_t prev;
 
 #define SHM_ENV_VAR "__AFL_SHM_ID"
 #define FORKSRV_FD          198
+#define TSL_FD              197
 static unsigned char afl_fork_child;
 unsigned int afl_forksrv_pid;
+
+
+#define CPUState void
+#define target_ulong uint64_t
+#define TranslationBlock void
+
+static void afl_wait_tsl(int);
+static void afl_request_tsl(target_ulong, target_ulong, uint64_t);
+
+void *get_current_cpu(void);
+void rcu_disable_atfork(void);
+void pretranslate_block(CPUState *cpu, uint64_t pc, uint64_t cs_base, uint32_t flags);
+
+void __attribute__((constructor)) constr(void)
+{
+  rcu_disable_atfork();
+}
+
+
+__thread CPUState *current_cpu;
+void ensure_current_cpu_initialized(void) {
+  if (__builtin_expect(!current_cpu, 0))
+    current_cpu = get_current_cpu();
+}
+
+/* Data structure passed around by the translate handlers: */
+
+struct afl_tsl {
+  target_ulong pc;
+  target_ulong cs_base;
+  uint32_t flags;
+};
 
 static void afl_setup(void) {
 
   char *id_str = getenv(SHM_ENV_VAR);
   int shm_id;
 
+  rcu_disable_atfork();
 
   if (id_str) {
 
@@ -44,10 +84,9 @@ static void afl_setup(void) {
 
 }
 
-
 /* Fork server logic, invoked once we hit _start. */
 
-void afl_forkserver(/*CPUState *cpu*/) {
+void afl_forkserver() {
 
   static unsigned char tmp[4];
 
@@ -75,8 +114,8 @@ void afl_forkserver(/*CPUState *cpu*/) {
     /* Establish a channel with child to grab translation commands. We'll
        read from t_fd[0], child will write to TSL_FD. */
 
-//     if (pipe(t_fd) || dup2(t_fd[1], TSL_FD) < 0) exit(3);
-//     close(t_fd[1]);
+     if (pipe(t_fd) || dup2(t_fd[1], TSL_FD) < 0) exit(3);
+     close(t_fd[1]);
 
     child_pid = fork();
     if (child_pid < 0) exit(4);
@@ -92,16 +131,15 @@ void afl_forkserver(/*CPUState *cpu*/) {
       return;
 
     }
-
     /* Parent. */
 
- //   close(TSL_FD);
+    close(TSL_FD);
 
     if (write(FORKSRV_FD + 1, &child_pid, 4) != 4) exit(5);
 
     /* Collect translation requests until child dies and closes the pipe. */
 
-//    afl_wait_tsl(cpu, t_fd[0]);
+    afl_wait_tsl(t_fd[0]);
 
     /* Get and relay exit status to parent. */
 
@@ -112,8 +150,52 @@ void afl_forkserver(/*CPUState *cpu*/) {
 
 }
 
-void initialize(void)
+static void afl_request_tsl(target_ulong pc, target_ulong cb, uint64_t flags) {
+
+  struct afl_tsl t;
+
+  if (!afl_fork_child) return;
+
+  t.pc      = pc;
+  t.cs_base = cb;
+  t.flags   = flags;
+
+  if (write(TSL_FD, &t, sizeof(struct afl_tsl)) != sizeof(struct afl_tsl))
+    return;
+
+}
+
+static void afl_wait_tsl(int fd) {
+  struct afl_tsl t;
+
+  while (1) {
+    /* Broken pipe means it's time to return to the fork server routine. */
+
+    if (read(fd, &t, sizeof(struct afl_tsl)) != sizeof(struct afl_tsl))
+      break;
+    ensure_current_cpu_initialized();
+    void *cpu = current_cpu;
+    pretranslate_block(cpu, t.pc, t.cs_base, t.flags);
+  }
+  close(fd);
+
+}
+
+void init_once(void)
 {
+  if (afl_fork_child) return;
+
   afl_setup();
   afl_forkserver();
+}
+
+void event_qemu_tb(uint64_t pc, uint64_t cs_base, uint32_t flags)
+{
+  afl_request_tsl(pc, cs_base, flags);
+}
+
+void event_cpu_exec(uint32_t is_entry)
+{
+  if (is_entry)
+    init_once();
 }

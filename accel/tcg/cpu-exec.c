@@ -135,6 +135,8 @@ static void init_delay_params(SyncClocks *sc, const CPUState *cpu)
 }
 #endif /* CONFIG USER ONLY */
 
+extern uint64_t program_entry;
+
 /* Execute a TB, and fix up the CPU state afterwards if necessary */
 static inline tcg_target_ulong cpu_tb_exec(CPUState *cpu, TranslationBlock *itb)
 {
@@ -143,6 +145,12 @@ static inline tcg_target_ulong cpu_tb_exec(CPUState *cpu, TranslationBlock *itb)
     TranslationBlock *last_tb;
     int tb_exit;
     uint8_t *tb_ptr = itb->tc.ptr;
+
+#ifdef CONFIG_USER_ONLY
+    instrument_event_cpu_exec(itb->pc == program_entry);
+#else
+    instrument_event_cpu_exec(false);
+#endif
 
     qemu_log_mask_and_addr(CPU_LOG_EXEC, itb->pc,
                            "Trace %d: %p ["
@@ -391,6 +399,14 @@ static inline void tb_add_jump(TranslationBlock *tb, int n,
  out_unlock_next:
     qemu_spin_unlock(&tb_next->jmp_lock);
     return;
+}
+
+void pretranslate_block(CPUState *cpu, uint64_t pc, uint64_t cs_base, uint32_t flags)
+{
+  mmap_lock();
+  TranslationBlock *tb = tb_gen_code(cpu, pc, cs_base, flags, 0);
+  mmap_unlock();
+  atomic_set(&cpu->tb_jmp_cache[tb_jmp_cache_hash_func(pc)], tb);
 }
 
 static inline TranslationBlock *tb_find(CPUState *cpu,

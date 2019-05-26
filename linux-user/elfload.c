@@ -20,6 +20,8 @@
 
 #define ELF_OSABI   ELFOSABI_SYSV
 
+uint64_t program_entry;
+
 /* from personality.h */
 
 /*
@@ -2350,6 +2352,9 @@ static void load_elf_image(const char *image_name, int image_fd,
     info->end_data = 0;
     info->brk = 0;
     info->elf_flags = ehdr->e_flags;
+
+    // like in AFL's qemu_mode
+    if (!program_entry) program_entry = info->entry;
 
     for (i = 0; i < ehdr->e_phnum; i++) {
         struct elf_phdr *eppnt = phdr + i;

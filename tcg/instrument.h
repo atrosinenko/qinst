@@ -29,6 +29,8 @@
 #include <stdint.h>
 #include <elf.h>
 
+#define MAX_OPS_PER_BPF_FUNCTION 1024
+
 #define CHECK_THAT(expr) if (!(expr)) { fprintf(stderr, "Check [" stringify(expr) "] failed.\n"); exit(1); }
 
 typedef struct {
@@ -55,6 +57,8 @@ typedef struct BpfInstrumentation {
   // loaded instrumenters
   ebpf_op *bpf_prog_by_op[256];
   size_t bpf_prog_len[256];
+  void (*event_qemu_tb)(uint64_t pc, uint64_t cs_base, uint32_t flags);
+  void (*event_cpu_exec)(uint32_t is_entry);
 } BpfInstrumentation;
 
 BpfInstrumentation *instrumentation_load(void);

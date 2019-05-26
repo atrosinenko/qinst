@@ -1090,9 +1090,14 @@ void tcg_op_remove(TCGContext *s, TCGOp *op);
 TCGOp *tcg_op_insert_before(TCGContext *s, TCGOp *op, TCGOpcode opc);
 TCGOp *tcg_op_insert_after(TCGContext *s, TCGOp *op, TCGOpcode opc);
 
+
+CPUState *get_current_cpu(void);
+void pretranslate_block(CPUState *cpu, uint64_t pc, uint64_t cs_base, uint32_t flags);
 void instrumentation_init(void);
 void instrumentation_shutdown(void);
-void tcg_instrument(TCGContext *s, target_ulong pc);
+void instrument_event_tb(target_ulong pc, target_ulong cs_base, uint64_t flags);
+void instrument_event_cpu_exec(bool entry_point);
+void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64_t flags);
 void tcg_optimize(TCGContext *s);
 
 TCGv_i32 tcg_const_i32(int32_t val);

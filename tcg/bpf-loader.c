@@ -57,6 +57,8 @@ static void native_load(BpfInstrumentation *inst, const char *file_name)
   if (file_name) {
     inst->native_handle = dlopen(file_name, RTLD_NOW | RTLD_LOCAL);
     CHECK_THAT(inst->native_handle != NULL);
+    inst->event_qemu_tb = dlsym(inst->native_handle, "event_qemu_tb");
+    inst->event_cpu_exec = dlsym(inst->native_handle, "event_cpu_exec");
   }
 }
 
@@ -199,6 +201,7 @@ static void populate_instrumentation(BpfInstrumentation *inst)
       inst->bpf_prog_by_op[target_opcode] = (ebpf_op *)(inst->sections[sym->st_shndx] + sym->st_value);
       inst->bpf_prog_len[target_opcode] = sym->st_size / 8;
       fprintf(stderr, "Found instrumenter \"%s\", %ld insns\n", sym_name, inst->bpf_prog_len[target_opcode]);
+      CHECK_THAT(inst->bpf_prog_len[target_opcode] < MAX_OPS_PER_BPF_FUNCTION);
     }
   }
 }
