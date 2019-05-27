@@ -45,6 +45,7 @@ typedef struct {
 
   // assigned in tcg_instrument
   TCGContext *s;
+  bool is_tagging;
 
   // assigned in tcg_instrument inside a loop
   TCGOp *qemu_op;
@@ -89,11 +90,19 @@ static inline TCGArg reg_by_num(InstrumentationContext *c, int reg_num)
     c->regs[reg_num] = tcg_temp_new_i64();
     c->allocated_regs |= 1 << reg_num;
 
+    const int nargs = def->nb_iargs;
     if (1 == reg_num) {
       insert_unary_before(c, INDEX_op_movi_i64, tcgv_i64_arg(c->regs[reg_num]), c->pc);
-    }
-    if (2 <= reg_num && reg_num <= def->nb_iargs + 1) {
+    } else if (2 <= reg_num && reg_num < nargs + 2) {
       insert_unary_before(c, INDEX_op_mov_i64, tcgv_i64_arg(c->regs[reg_num]), c->qemu_op->args[def->nb_oargs + reg_num - 2]);
+    } else if (c->is_tagging && nargs + 2 <= reg_num && reg_num < 2 * nargs + 2) {
+      int ind = reg_num - nargs - 2;
+      TCGTemp *val = arg_temp(c->qemu_op->args[def->nb_oargs + ind]);
+      if (val->tag) {
+        insert_unary_before(c, INDEX_op_mov_i64, tcgv_i64_arg(c->regs[reg_num]), temp_arg(val->tag));
+      } else {
+        insert_unary_before(c, INDEX_op_movi_i64, tcgv_i64_arg(c->regs[reg_num]), 0);
+      }
     }
   }
   return tcgv_i64_arg(c->regs[reg_num]);
@@ -294,6 +303,12 @@ static inline void instrument_one_insn(InstrumentationContext *c)
     c->labels[c->prog->len]->present = 1;
     insert_unary_before(c, INDEX_op_set_label, label_arg(c->labels[c->prog->len]), 0);
   }
+  if (tcg_op_defs[c->qemu_op->opc].nb_oargs > 0 && (c->allocated_regs & 1) != 0) {
+    TCGTemp *tag = tcgv_i64_temp(c->regs[0]);
+    arg_temp(c->qemu_op->args[0])->tag = tag;
+    tag->temp_local = 1;
+  }
+
   c->allocated_regs = 0;
   memset(c->labels, 0, (sizeof c->labels[0]) * (c->prog->len + 1));
 }
@@ -376,9 +391,16 @@ void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64
     if (ctx.pc) {
       ctx.qemu_op = op;
       if (inst->tracing_progs[opc].data) {
+        ctx.is_tagging = false;
         ctx.prog = inst->tracing_progs + opc;
         instrument_one_insn(&ctx);
-        need_localize_insn |= inst->tracing_progs[op->opc].requires_localization;
+        need_localize_insn |= inst->tracing_progs[opc].requires_localization;
+      }
+      if (inst->tagging_progs[opc].data) {
+        ctx.is_tagging = true;
+        ctx.prog = inst->tagging_progs + opc;
+        instrument_one_insn(&ctx);
+        need_localize_insn |= inst->tagging_progs[opc].requires_localization;
       }
     }
   }

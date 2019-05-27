@@ -182,6 +182,13 @@ static const char *inst_function_names[] = {
   NULL
 };
 
+static const char *tag_function_names[] = {
+#define DEF(name, a, b, c, d) stringify(tag_qemu_##name),
+#include "tcg-opc.h"
+#undef DEF
+  NULL
+};
+
 static int opcode_for_name(const char **name_table, const char *name)
 {
   for (int i = 0; name_table[i]; ++i) {
@@ -211,7 +218,7 @@ static void try_load_instrumenter(
       if ((prog->data[i].opcode & 0x07) == 0x05) {
         prog->requires_localization |= true;
         CHECK_THAT(prog->data[i].offset >= 0);
-        CHECK_THAT(i + 1 + prog->data[i].offset < prog->len);
+        CHECK_THAT(i + 1 + prog->data[i].offset <= prog->len);
       }
     }
 
@@ -229,6 +236,7 @@ static void populate_instrumentation(BpfInstrumentation *inst)
     if (ELF64_ST_BIND(sym->st_info) == STB_LOCAL || ELF64_ST_TYPE(sym->st_info) != STT_FUNC)
       continue;
     try_load_instrumenter("tracing", inst->tracing_progs, inst_function_names, inst, sym);
+    try_load_instrumenter("tagging", inst->tagging_progs, tag_function_names, inst, sym);
   }
 }
 

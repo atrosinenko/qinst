@@ -1238,6 +1238,7 @@ TCGTemp *tcg_temp_new_internal(TCGType type, bool temp_local)
         }
     }
 
+    ts->tag = 0;
 #if defined(CONFIG_DEBUG_TCG)
     s->temps_in_use++;
 #endif
