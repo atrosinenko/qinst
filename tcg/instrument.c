@@ -206,18 +206,20 @@ static inline uint instrument_gen_mem(InstrumentationContext *c, int64_t imm64)
 }
 
 TCGCond branch_mapping[] = {
-  TCG_COND_ALWAYS,
-  TCG_COND_EQ,
-  TCG_COND_GTU,
-  TCG_COND_GEU,
-  TCG_COND_LTU,
-  TCG_COND_LEU,
-  -1,
-  TCG_COND_NE,
-  TCG_COND_GT,
-  TCG_COND_GE,
-  TCG_COND_LT,
-  TCG_COND_LE,
+  TCG_COND_ALWAYS, // 05
+  TCG_COND_EQ,     // 15 / 1d
+  TCG_COND_GTU,    // 25 / 2d
+  TCG_COND_GEU,    // 35 / 3d
+  -1,              // 45 / 4d
+  TCG_COND_NE,     // 55 / 5d
+  TCG_COND_GT,     // 65 / 6d
+  TCG_COND_GE,     // 75 / 7d
+  -1,              // 8...
+  -1,              // 9...
+  TCG_COND_LTU,    // a5 / ad
+  TCG_COND_LEU,    // b5 / bd
+  TCG_COND_LT,     // c5 / cd
+  TCG_COND_LE,     // d5 / dd
 };
 
 static TCGLabel *ref_label_for_ind(InstrumentationContext *c, int index)
