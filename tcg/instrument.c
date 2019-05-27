@@ -332,12 +332,11 @@ void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64
 
   QTAILQ_FOREACH_SAFE(op, &s->ops, link, op_next) {
     TCGOpcode opc = op->opc;
-    ctr++;
-    if (inst->bpf_prog_by_op[opc]) {
-      ctx.qemu_op = op;
-      ctx.tag = pc + ctr;
-      ctx.inst_op_count = inst->bpf_prog_len[opc];
-      need_localization |= instrument_one_insn(&ctx, inst->bpf_prog_by_op[opc]);
+    ctx.qemu_op = op;
+    ctx.tag = pc + ctr++;
+    if (inst->tracing_progs[opc].data) {
+      ctx.inst_op_count = inst->tracing_progs[opc].len;
+      need_localization |= instrument_one_insn(&ctx, inst->tracing_progs[opc].data);
     }
   }
 

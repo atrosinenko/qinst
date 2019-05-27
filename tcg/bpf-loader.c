@@ -182,13 +182,35 @@ static const char *inst_function_names[] = {
   NULL
 };
 
-static int opcode_for_name(const char *name)
+static int opcode_for_name(const char **name_table, const char *name)
 {
-  for (int i = 0; inst_function_names[i]; ++i) {
-    if (strcmp(name, inst_function_names[i]) == 0)
+  for (int i = 0; name_table[i]; ++i) {
+    if (strcmp(name, name_table[i]) == 0)
       return i;
   }
   return -1;
+}
+
+static void try_load_instrumenter(
+    const char *title, bpf_prog *progs, const char **name_table,
+    BpfInstrumentation *inst, Elf64_Sym *sym)
+{
+  const char *sym_name = inst->strtab + sym->st_name;
+  int target_opcode = opcode_for_name(name_table, sym_name);
+  if (target_opcode != -1) {
+    bpf_prog *prog = progs + target_opcode;
+    TCGOpDef *def = tcg_op_defs + target_opcode;
+
+    prog->data = (ebpf_op *)(inst->sections[sym->st_shndx] + sym->st_value);
+    prog->len = sym->st_size / 8;
+    ebpf_op *last_op = prog->data + prog->len - 1;
+    if (last_op->opcode == 0x95) // exit as the last insn
+      prog->len--;
+    fprintf(stderr, "[%s] Found instrumenter \"%s\", %ld insns [oargs = %d iargs = %d cargs = %d]\n",
+            title, sym_name, prog->len,
+            def->nb_oargs, def->nb_iargs, def->nb_cargs);
+    CHECK_THAT(prog->len < MAX_OPS_PER_BPF_FUNCTION);
+  }
 }
 
 static void populate_instrumentation(BpfInstrumentation *inst)
@@ -197,14 +219,7 @@ static void populate_instrumentation(BpfInstrumentation *inst)
     Elf64_Sym *sym = (Elf64_Sym *)(inst->symtab + inst->symtab_entsize * i);
     if (ELF64_ST_BIND(sym->st_info) == STB_LOCAL || ELF64_ST_TYPE(sym->st_info) != STT_FUNC)
       continue;
-    const char *sym_name = inst->strtab + sym->st_name;
-    int target_opcode = opcode_for_name(sym_name);
-    if (target_opcode != -1) {
-      inst->bpf_prog_by_op[target_opcode] = (ebpf_op *)(inst->sections[sym->st_shndx] + sym->st_value);
-      inst->bpf_prog_len[target_opcode] = sym->st_size / 8;
-      fprintf(stderr, "Found instrumenter \"%s\", %ld insns\n", sym_name, inst->bpf_prog_len[target_opcode]);
-      CHECK_THAT(inst->bpf_prog_len[target_opcode] < MAX_OPS_PER_BPF_FUNCTION);
-    }
+    try_load_instrumenter("tracing", inst->tracing_progs, inst_function_names, inst, sym);
   }
 }
 
