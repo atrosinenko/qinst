@@ -48,8 +48,8 @@ typedef struct {
 
   // assigned in tcg_optimize inside a loop
   TCGOp *qemu_op;
-  uint64_t tag;
-  int inst_op_count;
+  uint64_t pc;
+  bpf_prog *prog;
 
   // assigned in instrument_one_insn
   ebpf_op inst_op;
@@ -86,11 +86,11 @@ static inline TCGArg reg_by_num(InstrumentationContext *c, int reg_num)
   const TCGOpDef * const def = &tcg_op_defs[c->qemu_op->opc];
   CHECK_THAT(reg_num < MAX_REGS);
   if ((c->allocated_regs & (1 << reg_num)) == 0) {
-    c->regs[reg_num] = tcg_temp_local_new_i64();
+    c->regs[reg_num] = tcg_temp_new_i64();
     c->allocated_regs |= 1 << reg_num;
 
     if (1 == reg_num) {
-      insert_unary_before(c, INDEX_op_movi_i64, tcgv_i64_arg(c->regs[reg_num]), c->tag);
+      insert_unary_before(c, INDEX_op_movi_i64, tcgv_i64_arg(c->regs[reg_num]), c->pc);
     }
     if (2 <= reg_num && reg_num <= def->nb_iargs + 1) {
       insert_unary_before(c, INDEX_op_mov_i64, tcgv_i64_arg(c->regs[reg_num]), c->qemu_op->args[def->nb_oargs + reg_num - 2]);
@@ -219,8 +219,6 @@ TCGCond branch_mapping[] = {
 
 static TCGLabel *ref_label_for_ind(InstrumentationContext *c, int index)
 {
-  CHECK_THAT(index >= 0);
-  CHECK_THAT(index <= c->inst_op_count);
   if (!c->labels[index])
     c->labels[index] = gen_new_label();
   return c->labels[index];
@@ -248,31 +246,28 @@ static inline uint instrument_gen_branch(InstrumentationContext *c, int cur_ind)
   int op_ind = c->inst_op.opcode >> 4;
   if (op_ind == 9) {
     // exit
-    TCGLabel *label = ref_label_for_ind(c, c->inst_op_count);
+    TCGLabel *label = ref_label_for_ind(c, c->prog->len);
     insert_brcond_before(c, TCG_COND_ALWAYS, 0, 0, label);
     return 1;
   }
   CHECK_THAT(op_ind < ARRAY_SIZE(branch_mapping) && branch_mapping[op_ind] != -1);
-  CHECK_THAT(c->inst_op.offset);
   TCGArg arg1 = reg_by_num(c, c->inst_op.dst);
   TCGArg arg2 = is_imm ? reg_imm(c, c->inst_op.imm) : reg_by_num(c, c->inst_op.src);
   insert_brcond_before(c, branch_mapping[op_ind], arg1, arg2, ref_label_for_ind(c, cur_ind + 1 + c->inst_op.offset));
   return 1;
 }
 
-static inline bool instrument_one_insn(InstrumentationContext *c, ebpf_op *inst_ops)
+static inline void instrument_one_insn(InstrumentationContext *c)
 {
   size_t skip_insn = 0;
 
-  bool has_branch = false;
-
-  for (size_t i = 0; i < c->inst_op_count; i += skip_insn) {
+  for (size_t i = 0; i < c->prog->len; i += skip_insn) {
     if (c->labels[i]) {
       c->labels[i]->present = 1;
       insert_unary_before(c, INDEX_op_set_label, label_arg(c->labels[i]), 0);
     }
-    c->inst_op = inst_ops[i];
-    int64_t imm64 = c->inst_op.imm | (((uint64_t)inst_ops[i + 1].imm) << 32);
+    c->inst_op = c->prog->data[i];
+    int64_t imm64 = c->inst_op.imm | (((uint64_t)c->prog->data[i + 1].imm) << 32);
     switch (c->inst_op.opcode & 0x07) {
     case 0x07: // 64-bit ALU
     case 0x04: // 32-bit ALU
@@ -285,25 +280,17 @@ static inline bool instrument_one_insn(InstrumentationContext *c, ebpf_op *inst_
       break;
     case 0x05: // branch
       skip_insn = instrument_gen_branch(c, i);
-      has_branch = true;
       break;
     default:
       tcg_abort();
     }
   }
-  if (c->labels[c->inst_op_count]) {
-    c->labels[c->inst_op_count]->present = 1;
-    insert_unary_before(c, INDEX_op_set_label, label_arg(c->labels[c->inst_op_count]), 0);
-  }
-  for (int i = 0; i < MAX_REGS; ++i) {
-    if (c->allocated_regs & (1 << i)) {
-      tcg_temp_free_i64(c->regs[i]);
-    }
+  if (c->labels[c->prog->len]) {
+    c->labels[c->prog->len]->present = 1;
+    insert_unary_before(c, INDEX_op_set_label, label_arg(c->labels[c->prog->len]), 0);
   }
   c->allocated_regs = 0;
-  memset(c->labels, 0, (sizeof c->labels[0]) * (c->inst_op_count + 1));
-
-  return has_branch;
+  memset(c->labels, 0, (sizeof c->labels[0]) * (c->prog->len + 1));
 }
 
 static void localize_insn(TCGOp *op)
@@ -315,12 +302,19 @@ static void localize_insn(TCGOp *op)
   }
 }
 
+static void localize_insn_range(TCGOp *begin, TCGOp *end)
+{
+  for (TCGOp *cur = begin; cur != end; cur = cur->link.tqe_next) {
+    localize_insn(cur);
+  }
+}
+
 void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64_t flags)
 {
   static __thread InstrumentationContext ctx;
   TCGOp *op, *op_next;
-  uint ctr = 0;
-  bool need_localization = false;
+  TCGOp *last_insn_start = NULL;
+  bool need_localize_insn = false;
 
   if (!inst)
     return;
@@ -330,20 +324,37 @@ void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64
   if (inst->event_qemu_tb)
     inst->event_qemu_tb(pc, cs_base, flags);
 
+  ctx.pc = 0;
+
+  // TODO I don't know why this is required... :(
+  // But otherwise it crashes somewhere in the
+  // generated code
+  tcg_temp_new_i64();
+
   QTAILQ_FOREACH_SAFE(op, &s->ops, link, op_next) {
     TCGOpcode opc = op->opc;
-    ctx.qemu_op = op;
-    ctx.tag = pc + ctr++;
-    if (inst->tracing_progs[opc].data) {
-      ctx.inst_op_count = inst->tracing_progs[opc].len;
-      need_localization |= instrument_one_insn(&ctx, inst->tracing_progs[opc].data);
+
+    if (opc == INDEX_op_insn_start) {
+      if (need_localize_insn && last_insn_start) {
+        localize_insn_range(last_insn_start, op);
+      }
+
+      need_localize_insn = false;
+      ctx.pc = op->args[0];
+      last_insn_start = op;
+    }
+
+    if (ctx.pc) {
+      ctx.qemu_op = op;
+      if (inst->tracing_progs[opc].data) {
+        ctx.prog = inst->tracing_progs + opc;
+        instrument_one_insn(&ctx);
+        need_localize_insn |= inst->tracing_progs[op->opc].requires_localization;
+      }
     }
   }
-
-  if (need_localization) {
-    QTAILQ_FOREACH_SAFE(op, &s->ops, link, op_next) {
-      localize_insn(op);
-    }
+  if (need_localize_insn && last_insn_start) {
+    localize_insn_range(last_insn_start, NULL);
   }
 }
 

@@ -44,6 +44,7 @@ typedef struct {
 typedef struct {
   ebpf_op *data;
   size_t len;
+  bool requires_localization;
 } bpf_prog;
 
 struct BpfInstrumentation;

@@ -206,8 +206,17 @@ static void try_load_instrumenter(
     ebpf_op *last_op = prog->data + prog->len - 1;
     if (last_op->opcode == 0x95) // exit as the last insn
       prog->len--;
-    fprintf(stderr, "[%s] Found instrumenter \"%s\", %ld insns [oargs = %d iargs = %d cargs = %d]\n",
-            title, sym_name, prog->len,
+
+    for (int i = 0; i < prog->len; ++i) {
+      if ((prog->data[i].opcode & 0x07) == 0x05) {
+        prog->requires_localization |= true;
+        CHECK_THAT(prog->data[i].offset >= 0);
+        CHECK_THAT(i + 1 + prog->data[i].offset < prog->len);
+      }
+    }
+
+    fprintf(stderr, "[%s] %sFound instrumenter \"%s\", %ld insns [oargs = %d iargs = %d cargs = %d]\n",
+            title, (prog->requires_localization) ? "[loc] " : "", sym_name, prog->len,
             def->nb_oargs, def->nb_iargs, def->nb_cargs);
     CHECK_THAT(prog->len < MAX_OPS_PER_BPF_FUNCTION);
   }
