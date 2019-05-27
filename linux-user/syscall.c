@@ -11655,6 +11655,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
     trace_guest_user_syscall(cpu, num, arg1, arg2, arg3, arg4,
                              arg5, arg6, arg7, arg8);
 
+    instrumentation_event_before_syscall(num, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
     if (unlikely(do_strace)) {
         print_syscall(num, arg1, arg2, arg3, arg4, arg5, arg6);
         ret = do_syscall1(cpu_env, num, arg1, arg2, arg3, arg4,
@@ -11664,6 +11665,7 @@ abi_long do_syscall(void *cpu_env, int num, abi_long arg1,
         ret = do_syscall1(cpu_env, num, arg1, arg2, arg3, arg4,
                           arg5, arg6, arg7, arg8);
     }
+    instrumentation_event_after_syscall(num, ret, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
 
     trace_guest_user_syscall_ret(cpu, num, ret);
     return ret;

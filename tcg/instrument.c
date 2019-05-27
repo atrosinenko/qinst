@@ -353,3 +353,14 @@ void instrument_event_cpu_exec(bool is_entry)
   if (inst->event_cpu_exec)
     inst->event_cpu_exec(is_entry);
 }
+
+void instrumentation_event_before_syscall(int num, target_long arg1, target_long arg2, target_long arg3, target_long arg4, target_long arg5, target_long arg6, target_long arg7, target_long arg8)
+{
+  if (inst->event_before_syscall)
+    inst->event_before_syscall(num, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
+}
+void instrumentation_event_after_syscall(int num, target_long ret, target_long arg1, target_long arg2, target_long arg3, target_long arg4, target_long arg5, target_long arg6, target_long arg7, target_long arg8)
+{
+  if (inst->event_after_syscall)
+    inst->event_after_syscall(num, ret, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8);
+}

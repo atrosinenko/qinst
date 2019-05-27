@@ -59,6 +59,8 @@ typedef struct BpfInstrumentation {
   size_t bpf_prog_len[256];
   void (*event_qemu_tb)(uint64_t pc, uint64_t cs_base, uint32_t flags);
   void (*event_cpu_exec)(uint32_t is_entry);
+  void (*event_before_syscall)(int num, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4, uint64_t arg5, uint64_t arg6, uint64_t arg7, uint64_t arg8);
+  void (*event_after_syscall)(int num, uint64_t ret, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4, uint64_t arg5, uint64_t arg6, uint64_t arg7, uint64_t arg8);
 } BpfInstrumentation;
 
 BpfInstrumentation *instrumentation_load(void);
