@@ -298,19 +298,43 @@ static inline void instrument_one_insn(InstrumentationContext *c)
   memset(c->labels, 0, (sizeof c->labels[0]) * (c->prog->len + 1));
 }
 
-static void localize_insn(TCGOp *op)
+static void clear_state(TCGOp *op)
 {
   const TCGOpDef * const def = &tcg_op_defs[op->opc];
   for (int i = 0; i < def->nb_oargs + def->nb_iargs; ++i) {
     TCGTemp *temp = arg_temp(op->args[i]);
-    temp->temp_local = 1;
+    temp->state = 0;
+  }
+}
+
+static void localize_insn(TCGOp *op, uint *counter)
+{
+  TCGOpcode opc = op->opc;
+  const TCGOpDef * const def = &tcg_op_defs[opc];
+  for (int i = 0; i < def->nb_oargs + def->nb_iargs; ++i) {
+    TCGTemp *temp = arg_temp(op->args[i]);
+
+    if (temp->state == 1) {
+      // first occurrence of this temp
+      temp->state = 1 + *counter;
+    } else {
+      if (temp->state != 1 + *counter) {
+        temp->temp_local = 1;
+      }
+    }
+    if (opc == INDEX_op_brcond_i32 || opc == INDEX_op_brcond_i64 || opc == INDEX_op_br || opc == INDEX_op_set_label)
+      *counter += 1;
   }
 }
 
 static void localize_insn_range(TCGOp *begin, TCGOp *end)
 {
+  uint counter = 0;
   for (TCGOp *cur = begin; cur != end; cur = cur->link.tqe_next) {
-    localize_insn(cur);
+    clear_state(cur);
+  }
+  for (TCGOp *cur = begin; cur != end; cur = cur->link.tqe_next) {
+    localize_insn(cur, &counter);
   }
 }
 
