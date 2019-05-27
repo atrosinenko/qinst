@@ -43,10 +43,10 @@ typedef struct {
   TCGLabel *labels[MAX_OPS_PER_BPF_FUNCTION];
   uint64_t allocated_regs;
 
-  // assigned in tcg_optimize
+  // assigned in tcg_instrument
   TCGContext *s;
 
-  // assigned in tcg_optimize inside a loop
+  // assigned in tcg_instrument inside a loop
   TCGOp *qemu_op;
   uint64_t pc;
   bpf_prog *prog;
@@ -134,13 +134,16 @@ static inline uint instrument_gen_alu(InstrumentationContext *c)
   assert(op_ind < ARRAY_SIZE(alu_opcodes));
 
   alu_op_mapping mapping = alu_opcodes[op_ind];
+  TCGOpcode new_opc = is_64bit ? mapping.opc64 : mapping.opc32;
   TCGArg arg0 = reg_by_num(c, c->inst_op.dst);
   TCGArg arg1 = 0;
   TCGArg arg2 = 0;
-  if (op_ind == 0x0b && is_imm)
-    arg1 = reg_imm(c, c->inst_op.imm);
-  else
+  if (op_ind == 0x0b && is_imm) {
+    new_opc = INDEX_op_movi_i64;
+    arg1 = c->inst_op.imm;
+  } else {
     arg1 = reg_by_num(c, mapping.first_arg_src ? c->inst_op.src : c->inst_op.dst);
+  }
   if (mapping.arg_cnt > 1) {
     if (is_imm) {
       arg2 = reg_imm(c, c->inst_op.imm);
@@ -148,7 +151,7 @@ static inline uint instrument_gen_alu(InstrumentationContext *c)
       arg2 = reg_by_num(c, c->inst_op.src);
     }
   }
-  insert_binary_before(c, is_64bit ? mapping.opc64 : mapping.opc32, arg0, arg1, arg2);
+  insert_binary_before(c, new_opc, arg0, arg1, arg2);
   return 1;
 }
 
