@@ -35,7 +35,7 @@ Possibilities from slowest to fastest:
 
 * (a) is already implemented as an early draft
 * (b) is not very hard to implement
-* (d) is probably achievable with something like RocketChip under present-and-near-future assumptions for QInst (no branches / only forward branches)
+* (d) is already implemented (early draft) as a [RoCC accelerator for RocketChip](https://github.com/atrosinenko/simpleinst) and [patched RocketChip](https://github.com/atrosinenko/rocket-chip)
 * (c) would be the most flexible (if possible at all) but requires some configurable FPGA-like additions to CPU :)
 
 ## Examples
