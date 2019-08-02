@@ -1101,7 +1101,7 @@ void instrumentation_shutdown(void);
 void instrument_event_tb(target_ulong pc, target_ulong cs_base, uint64_t flags);
 void instrument_event_link_tbs(target_ulong from_pc, int tb_exit, target_ulong pc, target_ulong cs_base, uint32_t flags, uint32_t cf_mask);
 void instrument_event_cpu_exec(bool entry_point);
-void instrumentation_event_before_syscall(int num, target_long arg1, target_long arg2, target_long arg3, target_long arg4, target_long arg5, target_long arg6, target_long arg7, target_long arg8);
+target_long instrumentation_event_before_syscall(int num, uint32_t *drop_syscall, target_long arg1, target_long arg2, target_long arg3, target_long arg4, target_long arg5, target_long arg6, target_long arg7, target_long arg8);
 void instrumentation_event_after_syscall(int num, target_long ret, target_long arg1, target_long arg2, target_long arg3, target_long arg4, target_long arg5, target_long arg6, target_long arg7, target_long arg8);
 void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64_t flags);
 void tcg_optimize(TCGContext *s);

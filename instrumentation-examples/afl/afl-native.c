@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <syscall.h>
 #include <string.h>
+#include <errno.h>
 
 
 #define MAP_SIZE 65536
@@ -193,9 +194,51 @@ static void afl_wait_tsl(int fd) {
 void init_once(void)
 {
   if (afl_fork_child) return;
+  fprintf(stderr, "==> AFL: INIT <==\n");
 
   afl_setup();
   afl_forkserver();
+}
+
+uint64_t event_before_syscall(uint32_t num, uint32_t *drop_syscall, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4, uint64_t arg5, uint64_t arg6, uint64_t arg7, uint64_t arg8)
+{
+  // Init forkserver when reading from stdin
+  if ((num == SYS_read && arg1 == 0)) {
+    init_once();
+  }
+  // ... or trying to interact with it
+  if (num == SYS_openat && strcmp((const char *)arg2, "/dev/stdin") == 0) {
+    init_once();
+  }
+  if (num == SYS_stat   && strcmp((const char *)arg1, "/dev/stdin") == 0) {
+    init_once();
+  }
+
+  // Do not crash parent due to dynamically loading iconv plugins in the child
+  if (num == SYS_openat && strstr((const char *)arg2, "linux-gnu/gconv/gconv-modules")) {
+    *drop_syscall = 1;
+    return ENOENT;
+  }
+
+  // Forcefully trigger crash when trying to write to the filesystem.
+  // This most probably signifies some security issue.
+  //
+  // When it can be disabled via some setting, this most probably
+  // should be disabled, otherwise it can clutter the entire system
+  // like with the command 'w' in sed.
+  if ((num == SYS_openat && (arg3 & (O_WRONLY | O_RDWR | O_APPEND | O_CREAT)) != 0))
+  {
+    abort();
+  }
+
+  // Forcefully trigger crash in **parent** when invoking execve.
+  // This is probably invoked from the forkserver's grand-child
+  // after fork in a child process when spawning some process.
+  // Disable this for the same reasons as the above.
+  if (num == SYS_execve) {
+    kill(getppid(), SIGABRT);
+  }
+  return 0;
 }
 
 void event_qemu_tb(uint64_t pc, uint64_t cs_base, uint32_t flags)
@@ -210,6 +253,4 @@ void event_qemu_link_tbs(uint64_t from_pc, uint32_t tb_exit, uint64_t pc, uint64
 
 void event_cpu_exec(uint32_t is_entry)
 {
-  if (is_entry)
-    init_once();
 }

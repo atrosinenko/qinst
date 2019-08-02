@@ -67,7 +67,7 @@ typedef struct BpfInstrumentation {
   void (*event_qemu_tb)(uint64_t pc, uint64_t cs_base, uint32_t flags);
   void (*event_qemu_link_tbs)(uint64_t from_pc, uint32_t tb_exit, uint64_t pc, uint64_t cs_base, uint32_t flags, uint32_t cf_mask);
   void (*event_cpu_exec)(uint32_t is_entry);
-  void (*event_before_syscall)(int num, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4, uint64_t arg5, uint64_t arg6, uint64_t arg7, uint64_t arg8);
+  uint64_t (*event_before_syscall)(uint32_t num, uint32_t *drop_syscall, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4, uint64_t arg5, uint64_t arg6, uint64_t arg7, uint64_t arg8);
   void (*event_after_syscall)(int num, uint64_t ret, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4, uint64_t arg5, uint64_t arg6, uint64_t arg7, uint64_t arg8);
 } BpfInstrumentation;
 
