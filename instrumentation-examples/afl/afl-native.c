@@ -113,7 +113,7 @@ void afl_forkserver() {
 
     /* Whoops, parent dead? */
 
-    if (read(FORKSRV_FD, tmp, 4) != 4) exit(2);
+    if (read(FORKSRV_FD, tmp, 4) <= 0) exit(2);
 
     /* Establish a channel with child to grab translation commands. We'll
        read from t_fd[0], child will write to TSL_FD. */
