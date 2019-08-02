@@ -58,6 +58,7 @@ static void native_load(BpfInstrumentation *inst, const char *file_name)
     inst->native_handle = dlopen(file_name, RTLD_NOW | RTLD_LOCAL);
     CHECK_THAT(inst->native_handle != NULL);
     inst->event_qemu_tb = dlsym(inst->native_handle, "event_qemu_tb");
+    inst->event_qemu_link_tbs = dlsym(inst->native_handle, "event_qemu_link_tbs");
     inst->event_before_syscall = dlsym(inst->native_handle, "event_before_syscall");
     inst->event_after_syscall = dlsym(inst->native_handle, "event_after_syscall");
     inst->event_cpu_exec = dlsym(inst->native_handle, "event_cpu_exec");

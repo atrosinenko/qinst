@@ -34,10 +34,11 @@ unsigned int afl_forksrv_pid;
 #define TranslationBlock void
 
 static void afl_wait_tsl(int);
-static void afl_request_tsl(target_ulong, target_ulong, uint64_t);
+static void afl_request_tsl(target_ulong, uint32_t, target_ulong, target_ulong, uint32_t, uint32_t);
 
 void *get_current_cpu(void);
 void rcu_disable_atfork(void);
+void prelink_blocks(CPUState *cpu, uint64_t from_pc, uint32_t tb_exit, uint64_t pc, uint64_t cs_base, uint32_t flags, uint32_t cf_mask);
 void pretranslate_block(CPUState *cpu, uint64_t pc, uint64_t cs_base, uint32_t flags);
 
 void __attribute__((constructor)) constr(void)
@@ -55,9 +56,12 @@ void ensure_current_cpu_initialized(void) {
 /* Data structure passed around by the translate handlers: */
 
 struct afl_tsl {
+  target_ulong from_pc;
+  uint32_t tb_exit;
   target_ulong pc;
   target_ulong cs_base;
   uint32_t flags;
+  uint32_t cf_mask;
 };
 
 static void afl_setup(void) {
@@ -145,20 +149,22 @@ void afl_forkserver() {
 
     if (waitpid(child_pid, &status, 0) < 0) exit(6);
     if (write(FORKSRV_FD + 1, &status, 4) != 4) exit(7);
-
   }
 
 }
 
-static void afl_request_tsl(target_ulong pc, target_ulong cb, uint64_t flags) {
+static void afl_request_tsl(target_ulong from_pc, uint32_t tb_exit, target_ulong pc, target_ulong cb, uint32_t flags, uint32_t cf_mask) {
 
   struct afl_tsl t;
 
   if (!afl_fork_child) return;
 
+  t.from_pc = from_pc;
+  t.tb_exit = tb_exit;
   t.pc      = pc;
   t.cs_base = cb;
   t.flags   = flags;
+  t.cf_mask = cf_mask;
 
   if (write(TSL_FD, &t, sizeof(struct afl_tsl)) != sizeof(struct afl_tsl))
     return;
@@ -175,7 +181,10 @@ static void afl_wait_tsl(int fd) {
       break;
     ensure_current_cpu_initialized();
     void *cpu = current_cpu;
-    pretranslate_block(cpu, t.pc, t.cs_base, t.flags);
+    if (t.from_pc)
+      prelink_blocks(cpu, t.from_pc, t.tb_exit, t.pc, t.cs_base, t.flags, t.cf_mask);
+    else
+      pretranslate_block(cpu, t.pc, t.cs_base, t.flags);
   }
   close(fd);
 
@@ -191,7 +200,12 @@ void init_once(void)
 
 void event_qemu_tb(uint64_t pc, uint64_t cs_base, uint32_t flags)
 {
-  afl_request_tsl(pc, cs_base, flags);
+  afl_request_tsl(0, 0, pc, cs_base, flags, 0);
+}
+
+void event_qemu_link_tbs(uint64_t from_pc, uint32_t tb_exit, uint64_t pc, uint64_t cs_base, uint32_t flags, uint32_t cf_mask)
+{
+  afl_request_tsl(from_pc, tb_exit, pc, cs_base, flags, cf_mask);
 }
 
 void event_cpu_exec(uint32_t is_entry)

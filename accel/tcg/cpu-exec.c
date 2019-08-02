@@ -409,6 +409,23 @@ void pretranslate_block(CPUState *cpu, uint64_t pc, uint64_t cs_base, uint32_t f
   atomic_set(&cpu->tb_jmp_cache[tb_jmp_cache_hash_func(pc)], tb);
 }
 
+static TranslationBlock *get_tb(CPUState *cpu, uint64_t pc, uint64_t cs_base, uint32_t flags, uint32_t cf_mask)
+{
+  cf_mask &= ~CF_CLUSTER_MASK;
+  cf_mask |= cpu->cluster_index << CF_CLUSTER_SHIFT;
+
+  return tb_htable_lookup(cpu, pc, cs_base, flags, cf_mask);
+}
+
+void prelink_blocks(CPUState *cpu, uint64_t from_pc, uint32_t tb_exit, uint64_t pc, uint64_t cs_base, uint32_t flags, uint32_t cf_mask)
+{
+  TranslationBlock *from_tb = get_tb(cpu, from_pc, cs_base, flags, cf_mask);
+  TranslationBlock *tb      = get_tb(cpu,      pc, cs_base, flags, cf_mask);
+  if (from_tb && tb) {
+    tb_add_jump(from_tb, tb_exit, tb);
+  }
+}
+
 static inline TranslationBlock *tb_find(CPUState *cpu,
                                         TranslationBlock *last_tb,
                                         int tb_exit, uint32_t cf_mask)
@@ -436,6 +453,7 @@ static inline TranslationBlock *tb_find(CPUState *cpu,
 #endif
     /* See if we can patch the calling TB. */
     if (last_tb) {
+        instrument_event_link_tbs(last_tb->pc, tb_exit, tb->pc, tb->cs_base, tb->flags, cf_mask);
         tb_add_jump(last_tb, tb_exit, tb);
     }
     return tb;

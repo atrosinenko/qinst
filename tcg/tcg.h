@@ -1095,9 +1095,11 @@ TCGOp *tcg_op_insert_after(TCGContext *s, TCGOp *op, TCGOpcode opc);
 
 CPUState *get_current_cpu(void);
 void pretranslate_block(CPUState *cpu, uint64_t pc, uint64_t cs_base, uint32_t flags);
+void prelink_blocks(CPUState *cpu, uint64_t from_pc, uint32_t tb_exit, uint64_t pc, uint64_t cs_base, uint32_t flags, uint32_t cf_mask);
 void instrumentation_init(void);
 void instrumentation_shutdown(void);
 void instrument_event_tb(target_ulong pc, target_ulong cs_base, uint64_t flags);
+void instrument_event_link_tbs(target_ulong from_pc, int tb_exit, target_ulong pc, target_ulong cs_base, uint32_t flags, uint32_t cf_mask);
 void instrument_event_cpu_exec(bool entry_point);
 void instrumentation_event_before_syscall(int num, target_long arg1, target_long arg2, target_long arg3, target_long arg4, target_long arg5, target_long arg6, target_long arg7, target_long arg8);
 void instrumentation_event_after_syscall(int num, target_long ret, target_long arg1, target_long arg2, target_long arg3, target_long arg4, target_long arg5, target_long arg6, target_long arg7, target_long arg8);

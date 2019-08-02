@@ -409,6 +409,12 @@ void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64
   }
 }
 
+void instrument_event_link_tbs(target_ulong from_pc, int tb_exit, target_ulong pc, target_ulong cs_base, uint32_t flags, uint32_t cf_mask)
+{
+  if (inst->event_qemu_link_tbs)
+    inst->event_qemu_link_tbs(from_pc, tb_exit, pc, cs_base, flags, cf_mask);
+}
+
 void instrument_event_cpu_exec(bool is_entry)
 {
   if (inst->event_cpu_exec)
