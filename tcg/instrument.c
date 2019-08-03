@@ -67,6 +67,21 @@ typedef struct alu_op_mapping {
 #define ALU_UNARY(name, from_src) { .opc32 = INDEX_op_##name##_i32, .opc64 = INDEX_op_##name##_i64, .arg_cnt = 1, .first_arg_src = from_src }
 #define ALU_BINARY(name) { .opc32 = INDEX_op_##name##_i32, .opc64 = INDEX_op_##name##_i64, .arg_cnt = 2, .first_arg_src = 0 }
 
+static inline void nb_oiargs(TCGOp *op, int *oargs, int *iargs)
+{
+  if (op->opc == INDEX_op_insn_start) {
+    *oargs = 0;
+    *iargs = 0;
+  } else if (op->opc == INDEX_op_call) {
+    *oargs = TCGOP_CALLO(op);
+    *iargs = TCGOP_CALLI(op);
+  } else {
+    const TCGOpDef * const def = &tcg_op_defs[op->opc];
+    *oargs = def->nb_oargs;
+    *iargs = def->nb_iargs;
+  }
+}
+
 static inline void insert_unary_before(InstrumentationContext *c, TCGOpcode opc, TCGArg arg0, TCGArg arg1)
 {
   TCGOp *new_op = tcg_op_insert_before(c->s, c->qemu_op, opc);
@@ -82,22 +97,31 @@ static inline void insert_binary_before(InstrumentationContext *c, TCGOpcode opc
   new_op->args[2] = arg2;
 }
 
+static TCGv_i64 temp_new_i64(void)
+{
+  TCGTemp *temp = tcgv_i64_temp(tcg_temp_new_i64());
+  temp->state = 0;
+  temp->state_ptr = NULL;
+  return temp_tcgv_i64(temp);
+}
+
 static inline TCGArg reg_by_num(InstrumentationContext *c, int reg_num)
 {
-  const TCGOpDef * const def = &tcg_op_defs[c->qemu_op->opc];
+  int nb_oargs, nb_iargs;
+  nb_oiargs(c->qemu_op, &nb_oargs, &nb_iargs);
   CHECK_THAT(reg_num < MAX_REGS);
   if ((c->allocated_regs & (1 << reg_num)) == 0) {
-    c->regs[reg_num] = tcg_temp_new_i64();
+    c->regs[reg_num] = temp_new_i64();
     c->allocated_regs |= 1 << reg_num;
 
-    const int nargs = def->nb_iargs;
+    const int nargs = nb_iargs;
     if (1 == reg_num) {
       insert_unary_before(c, INDEX_op_movi_i64, tcgv_i64_arg(c->regs[reg_num]), c->pc);
     } else if (2 <= reg_num && reg_num < nargs + 2) {
-      insert_unary_before(c, INDEX_op_mov_i64, tcgv_i64_arg(c->regs[reg_num]), c->qemu_op->args[def->nb_oargs + reg_num - 2]);
+      insert_unary_before(c, INDEX_op_mov_i64, tcgv_i64_arg(c->regs[reg_num]), c->qemu_op->args[nb_oargs + reg_num - 2]);
     } else if (c->is_tagging && nargs + 2 <= reg_num && reg_num < 2 * nargs + 2) {
       int ind = reg_num - nargs - 2;
-      TCGTemp *val = arg_temp(c->qemu_op->args[def->nb_oargs + ind]);
+      TCGTemp *val = arg_temp(c->qemu_op->args[nb_oargs + ind]);
       if (val->tag) {
         insert_unary_before(c, INDEX_op_mov_i64, tcgv_i64_arg(c->regs[reg_num]), temp_arg(val->tag));
       } else {
@@ -111,7 +135,7 @@ static inline TCGArg reg_by_num(InstrumentationContext *c, int reg_num)
 static inline TCGArg reg_imm(InstrumentationContext *c, uint64_t imm)
 {
   TCGOp *movi_op = tcg_op_insert_before(c->s, c->qemu_op, INDEX_op_movi_i64);
-  movi_op->args[0] = tcgv_i64_arg(tcg_temp_new_i64());
+  movi_op->args[0] = tcgv_i64_arg(temp_new_i64());
   movi_op->args[1] = imm;
   return movi_op->args[0];
 }
@@ -274,6 +298,8 @@ static inline uint instrument_gen_branch(InstrumentationContext *c, int cur_ind)
 static inline void instrument_one_insn(InstrumentationContext *c)
 {
   size_t skip_insn = 0;
+  int nb_oargs, nb_iargs;
+  nb_oiargs(c->qemu_op, &nb_oargs, &nb_iargs);
 
   for (size_t i = 0; i < c->prog->len; i += skip_insn) {
     if (c->labels[i]) {
@@ -315,8 +341,9 @@ static inline void instrument_one_insn(InstrumentationContext *c)
 
 static void clear_state(TCGOp *op)
 {
-  const TCGOpDef * const def = &tcg_op_defs[op->opc];
-  for (int i = 0; i < def->nb_oargs + def->nb_iargs; ++i) {
+  int nb_oargs, nb_iargs;
+  nb_oiargs(op, &nb_oargs, &nb_iargs);
+  for (int i = 0; i < nb_oargs + nb_iargs; ++i) {
     TCGTemp *temp = arg_temp(op->args[i]);
     temp->state = 0;
   }
@@ -325,8 +352,9 @@ static void clear_state(TCGOp *op)
 static void localize_insn(TCGOp *op, uint *counter)
 {
   TCGOpcode opc = op->opc;
-  const TCGOpDef * const def = &tcg_op_defs[opc];
-  for (int i = 0; i < def->nb_oargs + def->nb_iargs; ++i) {
+  int nb_oargs, nb_iargs;
+  nb_oiargs(op, &nb_oargs, &nb_iargs);
+  for (int i = 0; i < nb_oargs + nb_iargs; ++i) {
     TCGTemp *temp = arg_temp(op->args[i]);
 
     if (temp->state == 1) {
