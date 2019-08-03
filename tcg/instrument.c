@@ -329,10 +329,11 @@ static inline void instrument_one_insn(InstrumentationContext *c)
     c->labels[c->prog->len]->present = 1;
     insert_unary_before(c, INDEX_op_set_label, label_arg(c->labels[c->prog->len]), 0);
   }
-  if (tcg_op_defs[c->qemu_op->opc].nb_oargs > 0 && (c->allocated_regs & 1) != 0) {
-    TCGTemp *tag = tcgv_i64_temp(c->regs[0]);
-    arg_temp(c->qemu_op->args[0])->tag = tag;
-    tag->temp_local = 1;
+  if (nb_oargs > 0 && (c->allocated_regs & 1) != 0) {
+    TCGTemp *temp = arg_temp(c->qemu_op->args[0]);
+    TCGv_i64 tag = tcg_temp_local_new_i64();
+    temp->tag = tcgv_i64_temp(tag);
+    insert_unary_before(c, INDEX_op_mov_i64, tcgv_i64_arg(tag), tcgv_i64_arg(c->regs[0]));
   }
 
   c->allocated_regs = 0;
@@ -346,38 +347,68 @@ static void clear_state(TCGOp *op)
   for (int i = 0; i < nb_oargs + nb_iargs; ++i) {
     TCGTemp *temp = arg_temp(op->args[i]);
     temp->state = 0;
+    temp->state_ptr = NULL;
   }
 }
 
-static void localize_insn(TCGOp *op, uint *counter)
+static void localize_insn1(TCGOp *op, uint *counter)
 {
   TCGOpcode opc = op->opc;
   int nb_oargs, nb_iargs;
   nb_oiargs(op, &nb_oargs, &nb_iargs);
-  for (int i = 0; i < nb_oargs + nb_iargs; ++i) {
+
+  // this instruction starts the BB
+  if (opc == INDEX_op_set_label)
+    *counter += 1;
+
+  // process inputs first because they can be overwritten by this instruction
+  for (int i = nb_oargs; i < nb_oargs + nb_iargs; ++i) {
     TCGTemp *temp = arg_temp(op->args[i]);
 
-    if (temp->state == 1) {
-      // first occurrence of this temp
-      temp->state = 1 + *counter;
-    } else {
-      if (temp->state != 1 + *counter) {
-        temp->temp_local = 1;
+    if (!temp->temp_local && !temp->fixed_reg && !temp->temp_global) {
+      if (temp->state == 0) {
+        // first occurrence of this temp
+        temp->state = 1 + *counter;
+      } else if (temp->state != 1 + *counter && temp->state_ptr == NULL) {
+        assert(TCG_TARGET_REG_BITS == 64);
+        // create pending local temp
+        TCGTemp *local_temp = tcg_temp_new_internal(temp->base_type, true);
+        local_temp->tag = temp->tag;
+        local_temp->state = 0;
+        local_temp->state_ptr = NULL;
+        temp->state_ptr = local_temp;
       }
     }
-    if (opc == INDEX_op_brcond_i32 || opc == INDEX_op_brcond_i64 || opc == INDEX_op_br || opc == INDEX_op_set_label)
-      *counter += 1;
+  }
+
+  // then process outputs
+  for (int i = 0; i < nb_oargs; ++i) {
+    TCGTemp *temp = arg_temp(op->args[i]);
+    temp->state = 1 + *counter;
+  }
+
+  // these instructions end the BB
+  if (opc == INDEX_op_brcond_i32 || opc == INDEX_op_brcond_i64 || opc == INDEX_op_br ||
+      opc == INDEX_op_goto_tb || opc == INDEX_op_exit_tb)
+    *counter += 1;
+}
+
+static void localize_insn2(TCGOp *op)
+{
+  int nb_oargs, nb_iargs;
+  nb_oiargs(op, &nb_oargs, &nb_iargs);
+  for (int i = 0; i < nb_oargs + nb_iargs; ++i) {
+    TCGTemp *temp = arg_temp(op->args[i]);
+    if (temp->state_ptr) {
+      op->args[i] = temp_arg((TCGTemp *)temp->state_ptr);
+    }
   }
 }
 
-static void localize_insn_range(TCGOp *begin, TCGOp *end)
+static void localize_insn_range(TCGOp *begin, TCGOp *end, uint *counter)
 {
-  uint counter = 0;
   for (TCGOp *cur = begin; cur != end; cur = cur->link.tqe_next) {
-    clear_state(cur);
-  }
-  for (TCGOp *cur = begin; cur != end; cur = cur->link.tqe_next) {
-    localize_insn(cur, &counter);
+    localize_insn1(cur, counter);
   }
 }
 
@@ -401,14 +432,19 @@ void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64
   // TODO I don't know why this is required... :(
   // But otherwise it crashes somewhere in the
   // generated code
-  tcg_temp_new_i64();
+  temp_new_i64();
+  uint counter = 0;
+
+  QTAILQ_FOREACH_SAFE(op, &s->ops, link, op_next) {
+    clear_state(op);
+  }
 
   QTAILQ_FOREACH_SAFE(op, &s->ops, link, op_next) {
     TCGOpcode opc = op->opc;
 
     if (opc == INDEX_op_insn_start) {
       if (need_localize_insn && last_insn_start) {
-        localize_insn_range(last_insn_start, op);
+        localize_insn_range(last_insn_start, op, &counter);
       }
 
       need_localize_insn = false;
@@ -433,7 +469,13 @@ void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64
     }
   }
   if (need_localize_insn && last_insn_start) {
-    localize_insn_range(last_insn_start, NULL);
+    localize_insn_range(last_insn_start, NULL, &counter);
+  }
+  QTAILQ_FOREACH_SAFE(op, &s->ops, link, op_next) {
+    localize_insn2(op);
+  }
+  for (int i = 0; i < s->nb_globals; ++i) {
+    s->temps[i].tag = NULL;
   }
 }
 
