@@ -3870,6 +3870,18 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb)
 #endif
 
     tcg_instrument(s, tb->pc, tb->cs_base, tb->flags);
+
+#ifdef DEBUG_DISAS
+    if (unlikely(qemu_loglevel_mask(CPU_LOG_TB_OP_INST)
+                 && qemu_log_in_addr_range(tb->pc))) {
+        qemu_log_lock();
+        qemu_log("OP after instrumentation and before optimization and liveness analysis:\n");
+        tcg_dump_ops(s, false);
+        qemu_log("\n");
+        qemu_log_unlock();
+    }
+#endif
+
 #ifdef USE_TCG_OPTIMIZATIONS
     tcg_optimize(s);
 #endif
