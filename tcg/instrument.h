@@ -33,6 +33,15 @@
 
 #define CHECK_THAT(expr) if (!(expr)) { fprintf(stderr, "Check [" stringify(expr) "] failed.\n"); exit(1); }
 
+struct InstrumentationContext;
+typedef struct {
+  const char *name;
+  void *user_data;
+  void (*gen_function)(struct InstrumentationContext *c, void *user_data);
+} CallbackDef;
+
+extern CallbackDef callback_defs[];
+
 typedef struct {
   uint8_t opcode;
   uint8_t dst:4;
@@ -64,6 +73,7 @@ typedef struct BpfInstrumentation {
   bpf_prog tracing_progs[256];
   bpf_prog tagging_progs[256];
   //  loaded event handlers
+  void (*event_dispatch_slow_call)(void *env);
   void (*event_qemu_tb)(uint64_t pc, uint64_t cs_base, uint32_t flags);
   void (*event_qemu_link_tbs)(uint64_t from_pc, uint32_t tb_exit, uint64_t pc, uint64_t cs_base, uint32_t flags, uint32_t cf_mask);
   void (*event_cpu_exec)(uint32_t is_entry);

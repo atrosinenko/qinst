@@ -37,7 +37,7 @@ void instrumentation_init(void)
 
 #define MAX_REGS 16
 
-typedef struct {
+typedef struct InstrumentationContext {
   // thread-statically globals
   TCGv_i64 regs[MAX_REGS];
   TCGLabel *labels[MAX_OPS_PER_BPF_FUNCTION];
@@ -114,19 +114,8 @@ static inline TCGArg reg_by_num(InstrumentationContext *c, int reg_num)
     c->regs[reg_num] = temp_new_i64();
     c->allocated_regs |= 1 << reg_num;
 
-    const int nargs = nb_iargs;
-    if (1 == reg_num) {
-      insert_unary_before(c, INDEX_op_movi_i64, tcgv_i64_arg(c->regs[reg_num]), c->pc);
-    } else if (2 <= reg_num && reg_num < nargs + 2) {
-      insert_unary_before(c, INDEX_op_mov_i64, tcgv_i64_arg(c->regs[reg_num]), c->qemu_op->args[nb_oargs + reg_num - 2]);
-    } else if (c->is_tagging && nargs + 2 <= reg_num && reg_num < 2 * nargs + 2) {
-      int ind = reg_num - nargs - 2;
-      TCGTemp *val = arg_temp(c->qemu_op->args[nb_oargs + ind]);
-      if (val->tag) {
-        insert_unary_before(c, INDEX_op_mov_i64, tcgv_i64_arg(c->regs[reg_num]), temp_arg(val->tag));
-      } else {
-        insert_unary_before(c, INDEX_op_movi_i64, tcgv_i64_arg(c->regs[reg_num]), 0);
-      }
+    if (1 <= reg_num && reg_num <= nb_iargs) {
+      insert_unary_before(c, INDEX_op_mov_i64, tcgv_i64_arg(c->regs[reg_num]), c->qemu_op->args[nb_oargs + reg_num - 1]);
     }
   }
   return tcgv_i64_arg(c->regs[reg_num]);
@@ -278,10 +267,73 @@ static void insert_brcond_before(InstrumentationContext *c, TCGCond cond, TCGArg
   }
 }
 
+void HELPER(inst_slow_call)(CPUArchState *env)
+{
+  inst->event_dispatch_slow_call(env);
+}
+
+static void instrument_gen_call(struct InstrumentationContext *c, void *user_data)
+{
+  TCGOp *op = tcg_op_insert_before(c->s, c->qemu_op, INDEX_op_call);
+  op->args[0] = tcgv_ptr_arg(cpu_env);
+  op->args[1] = (uintptr_t)helper_inst_slow_call;
+  op->args[2] = 0;
+  TCGOP_CALLO(op) = 0;
+  TCGOP_CALLI(op) = 1;
+}
+
+static void instrument_gen_pc(struct InstrumentationContext *c, void *user_data)
+{
+  insert_unary_before(c, INDEX_op_movi_i64, reg_by_num(c, 0), c->pc);
+}
+
+static void instrument_gen_tag_for(struct InstrumentationContext *c, void *user_data)
+{
+  uintptr_t tag_ind = (uintptr_t)user_data;
+  int nb_oargs, nb_iargs;
+  nb_oiargs(c->qemu_op, &nb_oargs, &nb_iargs);
+  CHECK_THAT(tag_ind < nb_iargs);
+  TCGTemp *val = arg_temp(c->qemu_op->args[nb_oargs + tag_ind]);
+  if (val->tag) {
+    insert_unary_before(c, INDEX_op_mov_i64, reg_by_num(c, 0), temp_arg(val->tag));
+  } else {
+    insert_unary_before(c, INDEX_op_movi_i64, reg_by_num(c, 0), 0);
+  }
+}
+
+static void instrument_gen_const_for(struct InstrumentationContext *c, void *user_data)
+{
+  uintptr_t const_ind = (uintptr_t)user_data;
+  int nb_cargs = tcg_op_defs[c->qemu_op->opc].nb_cargs;
+  int nb_oargs, nb_iargs;
+  nb_oiargs(c->qemu_op, &nb_oargs, &nb_iargs);
+  CHECK_THAT(const_ind < nb_cargs);
+  insert_unary_before(c, INDEX_op_movi_i64, reg_by_num(c, 0), c->qemu_op->args[nb_oargs + nb_iargs + const_ind]);
+}
+
+CallbackDef callback_defs[] = {
+  {"slow_call", NULL,      instrument_gen_call},
+  {"pc",        NULL,      instrument_gen_pc},
+  {"tag1",      (void *)0, instrument_gen_tag_for},
+  {"tag2",      (void *)1, instrument_gen_tag_for},
+  {"tag3",      (void *)2, instrument_gen_tag_for},
+  {"const1",    (void *)0, instrument_gen_const_for},
+  {"const2",    (void *)1, instrument_gen_const_for},
+  {"const3",    (void *)2, instrument_gen_const_for},
+  {NULL,        NULL,      NULL}
+};
+
 static inline uint instrument_gen_branch(InstrumentationContext *c, int cur_ind)
 {
   bool is_imm = !(c->inst_op.opcode & 0x08);
   int op_ind = c->inst_op.opcode >> 4;
+  if (op_ind == 8) {
+    // call
+    CHECK_THAT(c->inst_op.imm < ARRAY_SIZE(callback_defs));
+    CallbackDef *def = callback_defs + c->inst_op.imm;
+    def->gen_function(c, def->user_data);
+    return 1;
+  }
   if (op_ind == 9) {
     // exit
     TCGLabel *label = ref_label_for_ind(c, c->prog->len);

@@ -68,6 +68,7 @@ static void native_load(BpfInstrumentation *inst, const char *file_name)
 
 #define str(x) #x
 #define LOAD(name) load_native_func((void **)&(inst->name), inst->native_handle, str(name));
+    LOAD(event_dispatch_slow_call);
     LOAD(event_qemu_tb);
     LOAD(event_qemu_link_tbs);
     LOAD(event_before_syscall);
@@ -155,8 +156,15 @@ static uint64_t find_symbol(BpfInstrumentation *inst, Elf64_Sym *sym)
     return sym->st_value;
   } else if (sym->st_shndx == SHN_UNDEF) {
     const char *sym_name = inst->strtab + sym->st_name;
+    for (int i = 0; callback_defs[i].name; ++i) {
+      if (strcmp(sym_name, callback_defs[i].name) == 0) {
+        fprintf(stderr, "Bound to callback: %s\n", callback_defs[i].name);
+        return i;
+      }
+    }
     void *sym_val = dlsym(inst->native_handle, sym_name);
     fprintf(stderr, "Binding to native symbol %s := %p\n", sym_name, sym_val);
+    CHECK_THAT(sym_val != 0);
     return (uint64_t)sym_val;
   } else {
     return (uint64_t)(inst->sections[sym->st_shndx] + sym->st_value);
@@ -170,17 +178,22 @@ static void perform_relocation(BpfInstrumentation *inst, uint8_t *data)
     if (section_header->sh_type == SHT_REL) {
       for (size_t j = 0; j < section_header->sh_size / sizeof(Elf64_Rel); ++j) {
         Elf64_Rel *rel = ((Elf64_Rel *)inst->sections[i]) + j;
-        CHECK_THAT(ELF64_R_TYPE(rel->r_info) == R_BPF_64_64);
         uint sym_ind = ELF64_R_SYM(rel->r_info);
         Elf64_Sym sym = ((Elf64_Sym *)inst->sections[section_header->sh_link])[sym_ind];
         uint64_t symbol = find_symbol(inst, &sym);
 
-        // TODO What with big endian?
         uint32_t *low = (uint32_t *)(inst->sections[section_header->sh_info] + rel->r_offset + 4);
         uint32_t *high = low + 2;
-        uint64_t val = symbol + ((((uint64_t)*high) << 32) | *low);
-        *low = (uint32_t)val;
-        *high = (uint32_t)(val >> 32);
+
+        if (ELF64_R_TYPE(rel->r_info) == R_BPF_64_64) {
+          // TODO What with big endian?
+          *low = (uint32_t)symbol;
+          *high = (uint32_t)(symbol >> 32);
+        } else {
+          CHECK_THAT(ELF64_R_TYPE(rel->r_info) == R_BPF_64_32);
+          CHECK_THAT((uint32_t)symbol == symbol);
+          *low = (uint32_t)symbol;
+        }
       }
     }
     if (section_header->sh_type == SHT_RELA) {
