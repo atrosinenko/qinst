@@ -52,16 +52,29 @@ void instrumentation_shutdown(void)
   }
 }
 
+static void load_native_func(void **func, void *handle, const char *name)
+{
+  *func = dlsym(handle, name);
+  if (*func) {
+    fprintf(stderr, "Found native handler: %s\n", name);
+  }
+}
+
 static void native_load(BpfInstrumentation *inst, const char *file_name)
 {
   if (file_name) {
     inst->native_handle = dlopen(file_name, RTLD_NOW | RTLD_LOCAL);
     CHECK_THAT(inst->native_handle != NULL);
-    inst->event_qemu_tb = dlsym(inst->native_handle, "event_qemu_tb");
-    inst->event_qemu_link_tbs = dlsym(inst->native_handle, "event_qemu_link_tbs");
-    inst->event_before_syscall = dlsym(inst->native_handle, "event_before_syscall");
-    inst->event_after_syscall = dlsym(inst->native_handle, "event_after_syscall");
-    inst->event_cpu_exec = dlsym(inst->native_handle, "event_cpu_exec");
+
+#define str(x) #x
+#define LOAD(name) load_native_func((void **)&(inst->name), inst->native_handle, str(name));
+    LOAD(event_qemu_tb);
+    LOAD(event_qemu_link_tbs);
+    LOAD(event_before_syscall);
+    LOAD(event_after_syscall);
+    LOAD(event_cpu_exec);
+#undef str
+#undef LOAD
   }
 }
 
