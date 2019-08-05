@@ -1,7 +1,7 @@
 #include <stdint.h>
 
 extern uint8_t *__afl_area_ptr;
-extern uint64_t prev;
+static uint64_t prev;
 
 static __attribute__((always_inline)) void br(uint64_t x, uint64_t y)
 {
