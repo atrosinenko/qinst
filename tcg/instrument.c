@@ -35,13 +35,18 @@ void instrumentation_init(void)
   inst = instrumentation_load();
 }
 
-#define MAX_REGS 16
+// r0 - r9
+#define MAX_REGS 10
+// for static references via r10
+#define MAX_STACK_WORDS 32
 
 typedef struct InstrumentationContext {
   // thread-statically globals
-  TCGv_i64 regs[MAX_REGS];
-  TCGLabel *labels[MAX_OPS_PER_BPF_FUNCTION];
   uint64_t allocated_regs;
+  TCGv_i64 regs[MAX_REGS];
+  uint64_t allocated_words;
+  TCGv_i64 stack_words[MAX_STACK_WORDS];
+  TCGLabel *labels[MAX_OPS_PER_BPF_FUNCTION];
 
   // assigned in tcg_instrument
   TCGContext *s;
@@ -119,6 +124,20 @@ static inline TCGArg reg_by_num(InstrumentationContext *c, int reg_num)
     }
   }
   return tcgv_i64_arg(c->regs[reg_num]);
+}
+
+static inline TCGArg stack_word_by_num(InstrumentationContext *c, int word_num)
+{
+  word_num = -(int16_t)word_num;
+  CHECK_THAT(word_num >= 0);
+  CHECK_THAT((word_num & 0x7) == 0);
+  word_num /= 8;
+  CHECK_THAT(word_num < MAX_STACK_WORDS);
+  if ((c->allocated_words & (1ll << word_num)) == 0) {
+    c->stack_words[word_num] = temp_new_i64();
+    c->allocated_words |= 1ll << word_num;
+  }
+  return tcgv_i64_arg(c->stack_words[word_num]);
 }
 
 static inline TCGArg reg_imm(InstrumentationContext *c, uint64_t imm)
@@ -201,6 +220,27 @@ static inline uint instrument_gen_mem(InstrumentationContext *c, int64_t imm64)
                          c->inst_op.offset); \
     return 1;
 
+  if (c->inst_op.dst == 10) { // stores to "stack" via r10
+    switch (c->inst_op.opcode) {
+    case 0x7b: // store i64
+      insert_unary_before(c, INDEX_op_mov_i64, stack_word_by_num(c, c->inst_op.offset), reg_by_num(c, c->inst_op.src));
+      return 1;
+    case 0x7a: // store i64 imm
+      insert_unary_before(c, INDEX_op_movi_i64, stack_word_by_num(c, c->inst_op.offset), imm64);
+      return 2;
+    default:
+      abort();
+    }
+  }
+  if (c->inst_op.src == 10) { // loads from "stack" via r10
+    switch (c->inst_op.opcode) {
+    case 0x79: // load i64
+      insert_unary_before(c, INDEX_op_mov_i64, reg_by_num(c, c->inst_op.dst), stack_word_by_num(c, c->inst_op.offset));
+      return 1;
+    default:
+      abort();
+    }
+  }
   switch (c->inst_op.opcode) {
   case 0x18:
     insert_unary_before(c, INDEX_op_movi_i64, reg_by_num(c, c->inst_op.dst), imm64);
@@ -389,6 +429,7 @@ static inline void instrument_one_insn(InstrumentationContext *c)
   }
 
   c->allocated_regs = 0;
+  c->allocated_words = 0;
   memset(c->labels, 0, (sizeof c->labels[0]) * (c->prog->len + 1));
 }
 
