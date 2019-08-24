@@ -111,7 +111,7 @@ void afl_forkserver() {
 
 void init_once(void)
 {
-  if (afl_fork_child) return;
+  if (afl_fork_child_pid) return;
   fprintf(stderr, "==> AFL: INIT <==\n");
 
   afl_setup();
@@ -121,14 +121,19 @@ void init_once(void)
 uint64_t event_before_syscall(uint32_t num, uint32_t *drop_syscall, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4, uint64_t arg5, uint64_t arg6, uint64_t arg7, uint64_t arg8)
 {
   // Init forkserver when reading from stdin
-  if ((num == SYS_read && arg1 == 0)) {
+  if ((num == SYS_read || num == SYS_pread64) && arg1 == 0) {
     init_once();
   }
   // ... or trying to interact with it
-  if (num == SYS_openat && strcmp((const char *)arg2, "/dev/stdin") == 0) {
+  if (num == SYS_openat && strcmp((const char *)g2h(arg2), "/dev/stdin") == 0) {
+//    init_once();
+    *drop_syscall = 1;
+    return 0;
+  }
+  if (num == SYS_stat && strcmp((const char *)g2h(arg1), "/dev/stdin") == 0) {
     init_once();
   }
-  if (num == SYS_stat   && strcmp((const char *)arg1, "/dev/stdin") == 0) {
+  if (num == SYS_fstat && arg1 == 0) {
     init_once();
   }
 

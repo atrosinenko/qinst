@@ -1,11 +1,13 @@
 #ifndef FORKSRV_UTILS_H
 #define FORKSRV_UTILS_H
 
+#include "base.h"
+
 // Based on the official QEMU patch from AFL (Apache 2.0 license) and some unoficial ones
 
 #define TSL_FD              197
 
-static unsigned char afl_fork_child;
+static unsigned char afl_fork_child_pid;
 
 #define CPUState void
 #define target_ulong uint64_t
@@ -23,6 +25,11 @@ void ensure_current_cpu_initialized(void) {
     current_cpu = get_current_cpu();
 }
 
+#define MAX_EXTRA_EXEC 2048
+static uint64_t extra_exec_start[MAX_EXTRA_EXEC];
+static uint64_t extra_exec_end[MAX_EXTRA_EXEC];
+static int extra_exec_count;
+
 /* Data structure passed around by the translate handlers: */
 
 struct afl_tsl {
@@ -38,8 +45,14 @@ struct afl_tsl {
 static void afl_request_tsl(target_ulong from_pc, uint32_t tb_exit, target_ulong pc, target_ulong cb, uint32_t flags, uint32_t cf_mask) {
 
   struct afl_tsl t;
+  memset(&t, 0, sizeof(t));
 
-  if (!afl_fork_child) return;
+  if (!afl_fork_child_pid) return;
+  if (extra_exec_count >= MAX_EXTRA_EXEC) return;
+  for (int i = 0; i < extra_exec_count; ++i) {
+    if (extra_exec_start[i] <= pc && pc < extra_exec_end[i])
+      return;
+  }
 
   t.from_pc = from_pc;
   t.tb_exit = tb_exit;
@@ -72,6 +85,15 @@ static void afl_wait_tsl(int fd) {
 
 }
 
+static void handle_mmap(uint64_t addr, uint64_t size, int prot)
+{
+  if (afl_fork_child_pid && (prot & PROT_EXEC) && extra_exec_count < MAX_EXTRA_EXEC) {
+    extra_exec_start[extra_exec_count] = addr;
+    extra_exec_end[extra_exec_count] = addr + size;
+    fprintf(stderr, "Blacklisting %lx - %lx\n", extra_exec_start[extra_exec_count], extra_exec_end[extra_exec_count]);
+    extra_exec_count += 1;
+  }
+}
 
 /* Establish a channel with child to grab translation commands. We'll
    read from t_fd[0], child will write to TSL_FD. */
@@ -81,7 +103,7 @@ static void afl_wait_tsl(int fd) {
     close(t_fd[1]);
 
 #define CHILD_HANDLE_TSL \
-    afl_fork_child = 1; \
+    afl_fork_child_pid = getpid(); \
     close(t_fd[0]);
 
 /* Collect translation requests until child dies and closes the pipe. */
@@ -97,6 +119,10 @@ static void afl_wait_tsl(int fd) {
     void event_qemu_link_tbs(uint64_t from_pc, uint32_t tb_exit, uint64_t pc, uint64_t cs_base, uint32_t flags, uint32_t cf_mask) \
     { \
       afl_request_tsl(from_pc, tb_exit, pc, cs_base, flags, cf_mask); \
+    } \
+    void event_after_syscall(int num, uint64_t ret, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4, uint64_t arg5, uint64_t arg6, uint64_t arg7, uint64_t arg8) \
+    { \
+      if (num == SYS_mmap) handle_mmap(ret, arg2, (int)arg3); \
     }
 
 #endif
