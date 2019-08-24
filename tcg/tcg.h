@@ -1096,6 +1096,7 @@ TCGOp *tcg_op_insert_after(TCGContext *s, TCGOp *op, TCGOpcode opc);
 CPUState *get_current_cpu(void);
 void pretranslate_block(CPUState *cpu, uint64_t pc, uint64_t cs_base, uint32_t flags);
 void prelink_blocks(CPUState *cpu, uint64_t from_pc, uint32_t tb_exit, uint64_t pc, uint64_t cs_base, uint32_t flags, uint32_t cf_mask);
+const char *qemu_opcode_name(uint32_t opc);
 void instrumentation_init(void);
 void instrumentation_shutdown(void);
 void instrument_event_tb(target_ulong pc, target_ulong cs_base, uint64_t flags);

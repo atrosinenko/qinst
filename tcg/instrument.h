@@ -37,7 +37,9 @@ struct InstrumentationContext;
 typedef struct {
   const char *name;
   void *user_data;
-  void (*gen_function)(struct InstrumentationContext *c, void *user_data);
+#define ABORT_CURRENT_INSTRUMENTER 1
+  uint64_t (*gen_function)(struct InstrumentationContext *c, void *user_data);
+  int requires_localization;
 } CallbackDef;
 
 extern CallbackDef callback_defs[];
@@ -47,7 +49,7 @@ typedef struct {
   uint8_t dst:4;
   uint8_t src:4;
   uint16_t offset;
-  uint32_t imm;
+   int32_t imm;
 } ebpf_op;
 
 typedef struct {
@@ -74,6 +76,7 @@ typedef struct BpfInstrumentation {
   bpf_prog tagging_progs[256];
   //  loaded event handlers
   void (*event_dispatch_slow_call)(void *env);
+  void (*event_drop_tag)(uint64_t tag, uint32_t opcode);
   void (*event_qemu_tb)(uint64_t pc, uint64_t cs_base, uint32_t flags);
   void (*event_qemu_link_tbs)(uint64_t from_pc, uint32_t tb_exit, uint64_t pc, uint64_t cs_base, uint32_t flags, uint32_t cf_mask);
   void (*event_cpu_exec)(uint32_t is_entry);
