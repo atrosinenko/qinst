@@ -501,7 +501,7 @@ static inline void instrument_one_insn(InstrumentationContext *c)
     TCGTemp *temp = arg_temp(c->cur_outputs[0]);
     if ((c->allocated_regs & 1) != 0) {
       if (!temp->tag) {
-        TCGv_i64 tag = tcg_temp_local_new_i64;
+        TCGv_i64 tag = tcg_temp_local_new_i64();
         temp->tag = tcgv_i64_temp(tag);
         temp->tag->state = 0;
         temp->tag->state_ptr = NULL;
@@ -515,6 +515,60 @@ static inline void instrument_one_insn(InstrumentationContext *c)
   c->allocated_regs = 0;
   c->allocated_words = 0;
   memset(c->labels, 0, (sizeof c->labels[0]) * (c->prog->len + 1));
+}
+
+static void preload_tag(InstrumentationContext *c, TCGTemp *temp)
+{
+  c->is_tagging = true;
+  c->prog = inst->tagging_progs + INDEX_op_ld_i64;
+  if (c->prog) {
+    TCGArg addr_arg = temp_arg(temp->mem_base);
+    TCGArg res_arg = temp_arg(temp);
+    TCGArg off_arg = temp->mem_offset;
+    fill_opc(c, INDEX_op_ld_i64);
+    c->cur_outputs = &res_arg;
+    c->cur_inputs = &addr_arg;
+    c->cur_consts = &off_arg;
+    instrument_one_insn(c);
+  }
+}
+
+static void save_tag(InstrumentationContext *c, TCGTemp *temp)
+{
+  c->is_tagging = true;
+  c->prog = inst->tagging_progs + INDEX_op_st_i64;
+  if (c->prog) {
+    TCGArg inputs[2] = {temp_arg(temp), temp_arg(temp->mem_base)};
+    TCGArg off_arg = temp->mem_offset;
+    fill_opc(c, INDEX_op_st_i64);
+    c->cur_outputs = NULL;
+    c->cur_inputs = inputs;
+    c->cur_consts = &off_arg;
+    instrument_one_insn(c);
+  }
+}
+
+static void find_used_globals(InstrumentationContext *c)
+{
+  TCGOp *op, *op_next;
+  int nb_oargs, nb_iargs;
+  for (int i = 0; i < c->s->nb_globals; ++i)
+    c->s->temps[i].state = 0;
+  QTAILQ_FOREACH_SAFE(op, &c->s->ops, link, op_next) {
+    nb_oiargs(op, &nb_oargs, &nb_iargs);
+    for (int i = nb_oargs; i < nb_oargs + nb_iargs; ++i) {
+      if (op->args[i] == TCG_CALL_DUMMY_ARG)
+        continue;
+      TCGTemp *temp = arg_temp(op->args[i]);
+      if (temp->temp_global && !temp->state && !temp->fixed_reg && temp->mem_base && !temp->tag) {
+        preload_tag(c, temp);
+      }
+    }
+    if (nb_oargs != 0 && op->args[0] != TCG_CALL_DUMMY_ARG) {
+      TCGTemp *temp = arg_temp(op->args[0]);
+      temp->state = 1;
+    }
+  }
 }
 
 static void clear_state(TCGOp *op)
@@ -620,6 +674,9 @@ void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64
   temp_new_i64();
   uint counter = 0;
 
+  ctx.insertion_point = s->ops.tqh_first;
+  find_used_globals(&ctx); // before clearing
+
   QTAILQ_FOREACH_SAFE(op, &s->ops, link, op_next) {
     clear_state(op);
   }
@@ -635,6 +692,16 @@ void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64
       need_localize_insn = false;
       ctx.pc = op->args[0];
       last_insn_start = op;
+    }
+
+    if (opc == INDEX_op_goto_tb || opc == INDEX_op_goto_ptr || opc == INDEX_op_exit_tb) {
+      ctx.insertion_point = op;
+      for (int i = 0; i < s->nb_globals; ++i) {
+        if (s->temps[i].tag)
+          save_tag(&ctx, s->temps + i);
+      }
+
+      break;
     }
 
     if (ctx.pc) {
