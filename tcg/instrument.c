@@ -171,6 +171,23 @@ static inline uint instrument_gen_alu(InstrumentationContext *c)
   bool is_imm = !(c->inst_op.opcode & 0x08);
   uint op_ind = (c->inst_op.opcode & 0xF0u) >> 4;
 
+  if (c->inst_op.opcode == 0xdc) { // to big-endian
+    switch(c->inst_op.imm) {
+    case 16:
+      insert_unary_before(c, INDEX_op_bswap16_i64, reg_by_num(c, c->inst_op.dst), reg_by_num(c, c->inst_op.dst));
+      break;
+    case 32:
+      insert_unary_before(c, INDEX_op_bswap32_i64, reg_by_num(c, c->inst_op.dst), reg_by_num(c, c->inst_op.dst));
+      break;
+    case 64:
+      insert_unary_before(c, INDEX_op_bswap64_i64, reg_by_num(c, c->inst_op.dst), reg_by_num(c, c->inst_op.dst));
+      break;
+    default:
+      abort();
+    }
+    return 1;
+  }
+
   assert(is_64bit);
   assert(op_ind < ARRAY_SIZE(alu_opcodes));
 
