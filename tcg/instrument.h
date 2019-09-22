@@ -75,8 +75,9 @@ typedef struct BpfInstrumentation {
   bpf_prog tracing_progs[256];
   bpf_prog tagging_progs[256];
   //  loaded event handlers
-  void (*event_dispatch_slow_call)(void *env);
+  void (*event_dispatch_slow_call)(uint64_t arg);
   void (*event_drop_tag)(uint64_t tag, uint32_t opcode);
+  uint32_t (*event_qemu_pc)(uint64_t pc);
   void (*event_qemu_tb)(uint64_t pc, uint64_t cs_base, uint32_t flags);
   void (*event_qemu_link_tbs)(uint64_t from_pc, uint32_t tb_exit, uint64_t pc, uint64_t cs_base, uint32_t flags, uint32_t cf_mask);
   void (*event_cpu_exec)(uint32_t is_entry);

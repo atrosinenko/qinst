@@ -333,9 +333,9 @@ static void insert_brcond_before(InstrumentationContext *c, TCGCond cond, TCGArg
   }
 }
 
-void HELPER(inst_slow_call)(CPUArchState *env)
+void HELPER(inst_slow_call)(uint64_t arg)
 {
-  inst->event_dispatch_slow_call(env);
+  inst->event_dispatch_slow_call(arg);
 }
 
 void HELPER(inst_drop_tag)(uint64_t tag, uint32_t opc)
@@ -361,8 +361,13 @@ static void instrument_gen_drop_tag(struct InstrumentationContext *c, TCGTemp *t
 
 static uint64_t instrument_gen_call(struct InstrumentationContext *c, void *user_data)
 {
+  TCGArg arg;
+  if (user_data)
+    arg = reg_imm(c, *(uint64_t *)user_data);
+  else
+    arg = reg_by_num(c, 1);
   TCGOp *op = tcg_op_insert_before(c->s, c->insertion_point, INDEX_op_call);
-  op->args[0] = tcgv_ptr_arg(cpu_env);
+  op->args[0] = arg;
   op->args[1] = (uintptr_t)helper_inst_slow_call;
   op->args[2] = 0;
   TCGOP_CALLO(op) = 0;
@@ -683,10 +688,15 @@ void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64
 
   QTAILQ_FOREACH_SAFE(op, &s->ops, link, op_next) {
     TCGOpcode opc = op->opc;
+    ctx.insertion_point = op;
 
     if (opc == INDEX_op_insn_start) {
       if (need_localize_insn && last_insn_start) {
         localize_insn_range(last_insn_start, op, &counter);
+      if (inst->event_qemu_pc) {
+        uint64_t res = inst->event_qemu_pc(op->args[0]);
+        if (res)
+          instrument_gen_call(&ctx, &res);
       }
 
       need_localize_insn = false;
@@ -705,7 +715,6 @@ void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64
     }
 
     if (ctx.pc) {
-      ctx.insertion_point = op;
       fill_opc(&ctx, op->opc);
       ctx.cur_outputs = op->args;
       ctx.cur_inputs = op->args + ctx.cur_oargs;

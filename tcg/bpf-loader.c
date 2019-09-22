@@ -64,12 +64,16 @@ static void native_load(BpfInstrumentation *inst, const char *file_name)
 {
   if (file_name) {
     inst->native_handle = dlopen(file_name, RTLD_NOW | RTLD_LOCAL);
+    if (!inst->native_handle) {
+      fprintf(stderr, "Error: %s\n", dlerror());
+    }
     CHECK_THAT(inst->native_handle != NULL);
 
 #define str(x) #x
 #define LOAD(name) load_native_func((void **)&(inst->name), inst->native_handle, str(name));
     LOAD(event_dispatch_slow_call);
     LOAD(event_drop_tag);
+    LOAD(event_qemu_pc);
     LOAD(event_qemu_tb);
     LOAD(event_qemu_link_tbs);
     LOAD(event_before_syscall);
