@@ -19,8 +19,8 @@ void *get_current_cpu(void);
 void prelink_blocks(CPUState *cpu, uint64_t from_pc, uint32_t tb_exit, uint64_t pc, uint64_t cs_base, uint32_t flags, uint32_t cf_mask);
 void pretranslate_block(CPUState *cpu, uint64_t pc, uint64_t cs_base, uint32_t flags);
 
-__thread CPUState *current_cpu;
-void ensure_current_cpu_initialized(void) {
+extern __thread CPUState *current_cpu;
+static void ensure_current_cpu_initialized(void) {
   if (__builtin_expect(!current_cpu, 0))
     current_cpu = get_current_cpu();
 }

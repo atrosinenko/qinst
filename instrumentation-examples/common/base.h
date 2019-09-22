@@ -7,9 +7,14 @@ extern "C" {
 
 extern uint64_t guest_base;
 
-void *g2h(uint64_t ptr)
+static inline void *g2h(uint64_t ptr)
 {
   return (void *)((uintptr_t)ptr + guest_base);
+}
+
+static inline void *h2g(uint64_t ptr)
+{
+  return (void *)((uintptr_t)ptr - guest_base);
 }
 
 #ifdef __cplusplus

@@ -23,7 +23,7 @@ static uint64_t handle_before_syscall(uint32_t num, uint32_t *drop_syscall, uint
   // should be disabled, otherwise it can clutter the entire system
   // like with the command 'w' in sed.
   if (afl_fork_child_pid && num == SYS_openat && (arg3 & (O_WRONLY | O_RDWR | O_APPEND | O_CREAT)) != 0 && strcmp(g2h(arg2), "/dev/null")) {
-    fprintf(stderr, "Opening %s for writing?!?\n", g2h(arg2));
+    fprintf(stderr, "Opening %s for writing?!?\n", (const char *)g2h(arg2));
     abort();
   }
 
@@ -32,7 +32,7 @@ static uint64_t handle_before_syscall(uint32_t num, uint32_t *drop_syscall, uint
   // after fork in a child process when spawning some process.
   // Disable this for the same reasons as the above.
   if (num == SYS_execve) {
-    fprintf(stderr, "Trying to execve(%s, ...)\n", g2h(arg1));
+    fprintf(stderr, "Trying to execve(%s, ...)\n", (const char *)g2h(arg1));
     if (afl_fork_child_pid)
       kill(afl_fork_child_pid, SIGABRT);
     else
