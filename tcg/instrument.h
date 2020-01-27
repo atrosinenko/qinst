@@ -29,6 +29,14 @@
 #include <stdint.h>
 #include <elf.h>
 
+// Hack for older versions elf.h
+#ifndef R_BPF_64_64
+# define R_BPF_64_64 1
+#endif
+#ifndef R_BPF_64_32
+# define R_BPF_64_32 10
+#endif
+
 #define MAX_OPS_PER_BPF_FUNCTION 1024
 
 #define CHECK_THAT(expr) if (!(expr)) { fprintf(stderr, "Check [" stringify(expr) "] failed.\n"); exit(1); }

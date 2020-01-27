@@ -691,7 +691,7 @@ void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64
     ctx.insertion_point = op;
 
     if (opc == INDEX_op_insn_start) {
-      if (need_localize_insn && last_insn_start) {
+      if (need_localize_insn && last_insn_start) 
         localize_insn_range(last_insn_start, op, &counter);
       if (inst->event_qemu_pc) {
         uint64_t res = inst->event_qemu_pc(op->args[0]);
