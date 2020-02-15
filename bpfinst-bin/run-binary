@@ -1,0 +1,6 @@
+#!/bin/sh
+
+root="$(dirname $0)/../"
+
+# You could use env variables such as QEMU_LOG (see qemu-x86_64 -h)
+${root}/${QARCH}-linux-user/qemu-${QARCH} -- "$@"

@@ -55,3 +55,6 @@
 [submodule "slirp"]
 	path = slirp
 	url = https://git.qemu.org/git/libslirp.git
+[submodule "bpfinst-spec"]
+	path = bpfinst-spec
+	url = https://github.com/atrosinenko/bpfinst-spec.git
