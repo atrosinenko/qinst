@@ -30,6 +30,18 @@
 
 static BpfInstrumentation *inst;
 
+static int inst_verbose;
+
+static void __attribute__((constructor)) constr(void)
+{
+  inst_verbose = getenv("INST_VERBOSE") != NULL;
+}
+
+int instrumentation_verbose(void)
+{
+  return inst_verbose;
+}
+
 void instrumentation_init(void)
 {
   inst = instrumentation_load();

@@ -39,6 +39,10 @@
 
 #define MAX_OPS_PER_BPF_FUNCTION 1024
 
+int instrumentation_verbose(void);
+
+#define INST_TRACE(fmt, ...) { if (instrumentation_verbose()) { fprintf(stderr, (fmt), __VA_ARGS__); } }
+
 #define CHECK_THAT(expr) if (!(expr)) { fprintf(stderr, "Check [" stringify(expr) "] failed.\n"); exit(1); }
 
 struct InstrumentationContext;

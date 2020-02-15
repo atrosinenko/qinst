@@ -56,7 +56,7 @@ static void load_native_func(void **func, void *handle, const char *name)
 {
   *func = dlsym(handle, name);
   if (*func) {
-    fprintf(stderr, "Found native handler: %s\n", name);
+    INST_TRACE("Found native handler: %s\n", name);
   }
 }
 
@@ -163,12 +163,12 @@ static uint64_t find_symbol(BpfInstrumentation *inst, Elf64_Sym *sym)
     const char *sym_name = inst->strtab + sym->st_name;
     for (int i = 0; callback_defs[i].name; ++i) {
       if (strcmp(sym_name, callback_defs[i].name) == 0) {
-        fprintf(stderr, "Bound to callback: %s\n", callback_defs[i].name);
+        INST_TRACE("Bound to callback: %s\n", callback_defs[i].name);
         return i;
       }
     }
     void *sym_val = dlsym(inst->native_handle, sym_name);
-    fprintf(stderr, "Binding to native symbol %s := %p\n", sym_name, sym_val);
+    INST_TRACE("Binding to native symbol %s := %p\n", sym_name, sym_val);
     CHECK_THAT(sym_val != 0);
     return (uint64_t)sym_val;
   } else {
