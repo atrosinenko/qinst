@@ -345,9 +345,9 @@ static void insert_brcond_before(InstrumentationContext *c, TCGCond cond, TCGArg
   }
 }
 
-void HELPER(inst_slow_call)(uint64_t arg)
+uint64_t HELPER(inst_slow_call)(uint64_t arg)
 {
-  inst->event_dispatch_slow_call(arg);
+  return inst->event_dispatch_slow_call(arg);
 }
 
 void HELPER(inst_drop_tag)(uint64_t tag, uint32_t opc)
@@ -379,10 +379,11 @@ static uint64_t instrument_gen_call(struct InstrumentationContext *c, void *user
   else
     arg = reg_by_num(c, 1);
   TCGOp *op = tcg_op_insert_before(c->s, c->insertion_point, INDEX_op_call);
-  op->args[0] = arg;
-  op->args[1] = (uintptr_t)helper_inst_slow_call;
-  op->args[2] = 0;
-  TCGOP_CALLO(op) = 0;
+  op->args[0] = reg_by_num(c, 0);
+  op->args[1] = arg;
+  op->args[2] = (uintptr_t)helper_inst_slow_call;
+  op->args[3] = 0;
+  TCGOP_CALLO(op) = 1;
   TCGOP_CALLI(op) = 1;
   return 0;
 }

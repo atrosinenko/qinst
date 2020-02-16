@@ -284,5 +284,5 @@ DEF_HELPER_FLAGS_4(gvec_leu16, TCG_CALL_NO_RWG, void, ptr, ptr, ptr, i32)
 DEF_HELPER_FLAGS_4(gvec_leu32, TCG_CALL_NO_RWG, void, ptr, ptr, ptr, i32)
 DEF_HELPER_FLAGS_4(gvec_leu64, TCG_CALL_NO_RWG, void, ptr, ptr, ptr, i32)
 
-DEF_HELPER_1(inst_slow_call, void, i64)
+DEF_HELPER_1(inst_slow_call, i64, i64)
 DEF_HELPER_2(inst_drop_tag, void, i64, i32)
