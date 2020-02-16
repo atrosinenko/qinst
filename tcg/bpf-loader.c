@@ -213,57 +213,57 @@ static void perform_relocation(BpfInstrumentation *inst, uint8_t *data)
   }
 }
 
-static const char *inst_function_names[] = {
-#define DEF(name, a, b, c, d) stringify(inst_qemu_##name),
-#include "tcg-opc.h"
-#undef DEF
-  NULL
+struct instrumenter_for_qop {
+  const char *name;
 };
 
-static const char *tag_function_names[] = {
-#define DEF(name, a, b, c, d) stringify(tag_qemu_##name),
-#include "tcg-opc.h"
-#undef DEF
-  NULL
-};
+static struct instrumenter_for_qop instrumenter_for_qop_index[PROG_ARRAY_SIZE];
 
-static int opcode_for_name(const char **name_table, const char *name)
+static void __attribute__((constructor)) constr(void)
 {
-  for (int i = 0; name_table[i]; ++i) {
-    if (strcmp(name, name_table[i]) == 0)
-      return i;
-  }
-  return -1;
+#define DEF_REGULAR_32_64(qop_name, obj_name) \
+  instrumenter_for_qop_index[INDEX_op_##qop_name##_i32] = (struct instrumenter_for_qop) {"inst_" stringify(obj_name)}; \
+  instrumenter_for_qop_index[INDEX_op_##qop_name##_i64] = (struct instrumenter_for_qop) {"inst_" stringify(obj_name)};
+
+  DEF_REGULAR_32_64(add, add)
+  DEF_REGULAR_32_64(sub, sub)
+  DEF_REGULAR_32_64(neg, neg)
+  DEF_REGULAR_32_64(mul, mul)
+  DEF_REGULAR_32_64(div, sdiv)
+  DEF_REGULAR_32_64(divu, udiv)
+  DEF_REGULAR_32_64(remu, urem)
+  DEF_REGULAR_32_64(rem, srem_nonneg) // TODO select proper version
+  DEF_REGULAR_32_64(and, and)
+  DEF_REGULAR_32_64(or, or)
+  DEF_REGULAR_32_64(xor, xor)
+  DEF_REGULAR_32_64(nand, nand)
+  DEF_REGULAR_32_64(nor, nor)
+  DEF_REGULAR_32_64(eqv, eqv)
+  DEF_REGULAR_32_64(not, not)
+  DEF_REGULAR_32_64(clz, clz)
+  DEF_REGULAR_32_64(ctz, ctz)
+  DEF_REGULAR_32_64(shl, shl)
+  DEF_REGULAR_32_64(shl, lshr)
+  DEF_REGULAR_32_64(sar, ashr)
+  DEF_REGULAR_32_64(setcond, cmp)
+
+#undef DEF_REGULAR_32_64
 }
 
-static void try_load_instrumenter(
-    const char *title, bpf_prog *progs, const char **name_table,
-    BpfInstrumentation *inst, Elf64_Sym *sym)
+static void try_load_instrumenter(bpf_prog *progs, BpfInstrumentation *inst, Elf64_Sym *sym)
 {
   const char *sym_name = inst->strtab + sym->st_name;
-  int target_opcode = opcode_for_name(name_table, sym_name);
-  if (target_opcode != -1) {
-    bpf_prog *prog = progs + target_opcode;
-    TCGOpDef *def = tcg_op_defs + target_opcode;
+  for (int target_opcode = 0; target_opcode < ARRAY_SIZE(instrumenter_for_qop_index); ++target_opcode) {
+    const char *instrumenter_name = instrumenter_for_qop_index[target_opcode].name;
+    if (instrumenter_name && strcmp(sym_name, instrumenter_name) == 0) {
+      bpf_prog *prog = progs + target_opcode;
 
-    prog->data = (ebpf_op *)(inst->sections[sym->st_shndx] + sym->st_value);
-    prog->len = sym->st_size / 8;
-    ebpf_op *last_op = prog->data + prog->len - 1;
-    if (last_op->opcode == 0x95) // exit as the last insn
-      prog->len--;
-
-    for (int i = 0; i < prog->len; ++i) {
-      if ((prog->data[i].opcode & 0x07) == 0x05) {
-        prog->requires_localization |= true;
-        CHECK_THAT(prog->data[i].offset >= 0);
-        CHECK_THAT(i + 1 + prog->data[i].offset <= prog->len);
-      }
+      prog->data = (ebpf_op *)(inst->sections[sym->st_shndx] + sym->st_value);
+      prog->len = sym->st_size / 8;
+      ebpf_op *last_op = prog->data + prog->len - 1;
+      if (last_op->opcode == 0x95) // exit as the last insn
+        prog->len--;
     }
-
-    fprintf(stderr, "[%s] %sFound instrumenter \"%s\", %ld insns [oargs = %d iargs = %d cargs = %d]\n",
-            title, (prog->requires_localization) ? "[loc] " : "", sym_name, prog->len,
-            def->nb_oargs, def->nb_iargs, def->nb_cargs);
-    CHECK_THAT(prog->len < MAX_OPS_PER_BPF_FUNCTION);
   }
 }
 
@@ -273,8 +273,45 @@ static void populate_instrumentation(BpfInstrumentation *inst)
     Elf64_Sym *sym = (Elf64_Sym *)(inst->symtab + inst->symtab_entsize * i);
     if (ELF64_ST_BIND(sym->st_info) == STB_LOCAL || ELF64_ST_TYPE(sym->st_info) != STT_FUNC)
       continue;
-    try_load_instrumenter("tracing", inst->tracing_progs, inst_function_names, inst, sym);
-    try_load_instrumenter("tagging", inst->tagging_progs, tag_function_names, inst, sym);
+    try_load_instrumenter(inst->progs, inst, sym);
+  }
+}
+
+static void analyze_progs(BpfInstrumentation *inst)
+{
+  instrumenter_features_t total_features = 0;
+  for (int qopc = 0; qopc < PROG_ARRAY_SIZE; ++qopc) {
+    bpf_prog *prog = inst->progs + qopc;
+    instrumenter_features_t features = 0;
+
+    if (!prog->data) {
+      continue;
+    }
+
+    for (int ind = 0; ind < prog->len; ++ind) {
+      ebpf_op *inst_insn = prog->data + ind;
+      if (inst_insn->opcode == 0x85) { // call
+        features |= callback_defs[inst_insn->imm].required_features;
+      } else if (inst_insn->opcode == 0x95) { // exit
+        // do nothing
+      } else if ((inst_insn->opcode & 0x07) == 0x05) { // generic branch
+        features |= REQUIRES_LOCALIZATION;
+        CHECK_THAT(inst_insn->offset >= 0);
+        CHECK_THAT(ind + 1 + inst_insn->offset <= prog->len);
+      }
+    }
+    prog->required_features = features;
+    total_features |= features;
+
+    INST_TRACE("Found instrumenter for %s, %ld insns%s%s\n",
+            tcg_op_defs[qopc].name, prog->len,
+            (prog->required_features & REQUIRES_LOCALIZATION) ? ", requires localization" : "",
+            (prog->required_features & CAN_SET_TAG) ? ", can set tags" : "");
+    CHECK_THAT(prog->len < MAX_OPS_PER_BPF_FUNCTION);
+  }
+  inst->needs_tags = !!(total_features & CAN_SET_TAG);
+  if (!inst->needs_tags) {
+    INST_TRACE("%s\n", "Tags are not used, disabling.");
   }
 }
 
@@ -285,6 +322,7 @@ static void bpf_load(BpfInstrumentation *inst, const char *bpf_inst)
   create_sections(inst, bpf_data);
   perform_relocation(inst, bpf_data);
   populate_instrumentation(inst);
+  analyze_progs(inst);
 }
 
 BpfInstrumentation *instrumentation_load(void)

@@ -6,5 +6,6 @@ git:
   submodules: false
 
 script:
+- git submodule update --init bpfinst-spec
 - ./configure --target-list=x86_64-linux-user
 - make

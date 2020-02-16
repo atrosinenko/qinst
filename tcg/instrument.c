@@ -27,10 +27,12 @@
 #include "exec/cpu-common.h"
 #include "tcg-op.h"
 #include "instrument.h"
+#include "bpfinst-spec/include/bpfinst/common.h"
 
 static BpfInstrumentation *inst;
 
-static int inst_verbose;
+static bool needs_tags;
+static bool inst_verbose;
 
 static void __attribute__((constructor)) constr(void)
 {
@@ -45,6 +47,7 @@ int instrumentation_verbose(void)
 void instrumentation_init(void)
 {
   inst = instrumentation_load();
+  needs_tags = inst->needs_tags;
 }
 
 // r0 - r9
@@ -62,22 +65,24 @@ typedef struct InstrumentationContext {
 
   // assigned in tcg_instrument
   TCGContext *s;
-  bool is_tagging;
 
   // assigned in tcg_instrument inside a loop
   int cur_oargs, cur_iargs, cur_cargs;
   TCGArg *cur_outputs, *cur_inputs, *cur_consts;
+  int width;
   TCGOp *insertion_point;
   uint64_t pc;
   bpf_prog *prog;
 
   // assigned in instrument_one_insn
   ebpf_op inst_op;
+  TCGTemp *pending_tag;
 } InstrumentationContext;
 
 static int fill_opc(InstrumentationContext *c, TCGOpcode opc)
 {
   TCGOpDef *def = tcg_op_defs + opc;
+  c->width = (def->flags & TCG_OPF_64BIT) ? 64 : 32;
   c->cur_oargs = def->nb_oargs;
   c->cur_iargs = def->nb_iargs;
   c->cur_cargs = def->nb_cargs;
@@ -355,6 +360,8 @@ void HELPER(inst_drop_tag)(uint64_t tag, uint32_t opc)
   inst->event_drop_tag(tag, opc);
 }
 
+// TODO
+#if 0
 static void instrument_gen_drop_tag(struct InstrumentationContext *c, TCGTemp *tag)
 {
   TCGLabel *label = gen_new_label();
@@ -370,12 +377,13 @@ static void instrument_gen_drop_tag(struct InstrumentationContext *c, TCGTemp *t
   TCGOp *op_label = tcg_op_insert_before(c->s, c->insertion_point, INDEX_op_set_label);
   op_label->args[0] = label_arg(label);
 }
+#endif
 
-static uint64_t instrument_gen_call(struct InstrumentationContext *c, void *user_data)
+static uint64_t instrument_gen_call(struct InstrumentationContext *c, uint64_t user_data)
 {
   TCGArg arg;
   if (user_data)
-    arg = reg_imm(c, *(uint64_t *)user_data);
+    arg = reg_imm(c, user_data);
   else
     arg = reg_by_num(c, 1);
   TCGOp *op = tcg_op_insert_before(c->s, c->insertion_point, INDEX_op_call);
@@ -388,13 +396,13 @@ static uint64_t instrument_gen_call(struct InstrumentationContext *c, void *user
   return 0;
 }
 
-static uint64_t instrument_gen_pc(struct InstrumentationContext *c, void *user_data)
+static uint64_t instrument_gen_pc(struct InstrumentationContext *c, uint64_t user_data)
 {
   insert_unary_before(c, INDEX_op_movi_i64, reg_by_num(c, 0), c->pc);
   return 0;
 }
 
-static uint64_t instrument_gen_tag_for(struct InstrumentationContext *c, void *user_data)
+static uint64_t instrument_gen_tag_for(struct InstrumentationContext *c, uint64_t user_data)
 {
   uintptr_t tag_ind = (uintptr_t)user_data;
   CHECK_THAT(tag_ind < c->cur_iargs);
@@ -407,15 +415,13 @@ static uint64_t instrument_gen_tag_for(struct InstrumentationContext *c, void *u
   return 0;
 }
 
-static uint64_t instrument_gen_const_for(struct InstrumentationContext *c, void *user_data)
+static uint64_t instrument_gen_set_tag(struct InstrumentationContext *c, uint64_t user_data)
 {
-  uintptr_t const_ind = (uintptr_t)user_data;
-  CHECK_THAT(const_ind < c->cur_cargs);
-  insert_unary_before(c, INDEX_op_movi_i64, reg_by_num(c, 0), c->cur_consts[const_ind]);
+  insert_unary_before(c, INDEX_op_mov_i64, temp_arg(c->pending_tag), tcgv_i64_arg(c->regs[1]));
   return 0;
 }
 
-static uint64_t instrument_gen_stop_if_no_tags(struct InstrumentationContext *c, void *user_data)
+static uint64_t instrument_gen_stop_if_no_tags(struct InstrumentationContext *c, uint64_t user_data)
 {
   for (int i = 0; i < c->cur_iargs; ++i) {
     if (arg_temp(c->cur_inputs[i])->tag)
@@ -424,7 +430,39 @@ static uint64_t instrument_gen_stop_if_no_tags(struct InstrumentationContext *c,
   return ABORT_CURRENT_INSTRUMENTER;
 }
 
-static uint64_t instrument_gen_getcondres(struct InstrumentationContext *c, void *user_data)
+static int inst_cond_by_tcg_cond[16];
+
+static void __attribute__((constructor)) init_conds(void)
+{
+  inst_cond_by_tcg_cond[TCG_COND_NEVER] = COND_NEVER;
+  inst_cond_by_tcg_cond[TCG_COND_ALWAYS] = COND_ALWAYS;
+  inst_cond_by_tcg_cond[TCG_COND_EQ] = COND_EQ;
+  inst_cond_by_tcg_cond[TCG_COND_NE] = COND_NEQ;
+  // see is_signeg() / is_unsigned()
+  inst_cond_by_tcg_cond[TCG_COND_LT] = COND_LT;
+  inst_cond_by_tcg_cond[TCG_COND_GE] = COND_GE;
+  inst_cond_by_tcg_cond[TCG_COND_LE] = COND_LE;
+  inst_cond_by_tcg_cond[TCG_COND_GT] = COND_GT;
+  inst_cond_by_tcg_cond[TCG_COND_LTU] = COND_LT;
+  inst_cond_by_tcg_cond[TCG_COND_GEU] = COND_GE;
+  inst_cond_by_tcg_cond[TCG_COND_LEU] = COND_LE;
+  inst_cond_by_tcg_cond[TCG_COND_GTU] = COND_GT;
+}
+
+static uint64_t instrument_gen_width(struct InstrumentationContext *c, uint64_t user_data)
+{
+  insert_unary_before(c, INDEX_op_movi_i64, reg_by_num(c, 0), c->width);
+  return 0;
+}
+
+static uint64_t instrument_gen_condition(struct InstrumentationContext *c, uint64_t user_data)
+{
+  insert_unary_before(c, INDEX_op_movi_i64, reg_by_num(c, 0),
+                      inst_cond_by_tcg_cond[c->cur_consts[0]]);
+  return 0;
+}
+
+static uint64_t instrument_gen_condition_result(struct InstrumentationContext *c, uint64_t user_data)
 {
   // (original-condition) ? (arg1) : (arg2)
 
@@ -442,18 +480,18 @@ static uint64_t instrument_gen_getcondres(struct InstrumentationContext *c, void
 }
 
 CallbackDef callback_defs[] = {
-  {"slow_call", NULL,      instrument_gen_call, 0},
-  {"pc",        NULL,      instrument_gen_pc, 0},
-  {"tag1",      (void *)0, instrument_gen_tag_for, 0},
-  {"tag2",      (void *)1, instrument_gen_tag_for, 0},
-  {"tag3",      (void *)2, instrument_gen_tag_for, 0},
-  {"tag4",      (void *)3, instrument_gen_tag_for, 0},
-  {"const1",    (void *)0, instrument_gen_const_for, 0},
-  {"const2",    (void *)1, instrument_gen_const_for, 0},
-  {"const3",    (void *)2, instrument_gen_const_for, 0},
-  {"getcondres",(void *)0, instrument_gen_getcondres, 0},
-  {"stop_if_no_tags", (void *)0, instrument_gen_stop_if_no_tags, 0},
-  {NULL,        NULL,      NULL, 0}
+  { "slow_call",        0, instrument_gen_call, 0},
+  { "pseudo_pc",        0, instrument_gen_pc, 0},
+  { "tag1",             0, instrument_gen_tag_for, 0},
+  { "tag2",             1, instrument_gen_tag_for, 0},
+  { "set_tag",          0, instrument_gen_set_tag, CAN_SET_TAG},
+  { "bit_width_res",    0, instrument_gen_width, 0},
+  { "bit_width1",       1, instrument_gen_width, 0},
+  { "bit_width2",       2, instrument_gen_width, 0},
+  { "condition",        0, instrument_gen_condition, 0},
+  { "condition_result", 0, instrument_gen_condition_result, 0},
+  { "stop_if_no_tags",  0, instrument_gen_stop_if_no_tags, 0},
+  {NULL,                0, NULL, 0}
 };
 
 static inline uint instrument_gen_branch(InstrumentationContext *c, int cur_ind)
@@ -485,6 +523,17 @@ static inline void instrument_one_insn(InstrumentationContext *c)
 {
   int skip_insn = 0;
 
+  if (c->prog->required_features & CAN_SET_TAG) {
+    TCGTemp *temp = arg_temp(c->cur_outputs[0]);
+    if (!temp->tag) {
+      TCGv_i64 tag = tcg_temp_local_new_i64();
+      temp->tag = tcgv_i64_temp(tag);
+      temp->tag->state = 0;
+      temp->tag->state_ptr = NULL;
+      insert_unary_before(c, INDEX_op_movi_i64, tcgv_i64_arg(tag), 0);
+    }
+    c->pending_tag = temp->tag;
+  }
   for (size_t i = 0; i < c->prog->len; i += skip_insn) {
     if (c->labels[i]) {
       c->labels[i]->present = 1;
@@ -515,20 +564,6 @@ static inline void instrument_one_insn(InstrumentationContext *c)
     c->labels[c->prog->len]->present = 1;
     insert_unary_before(c, INDEX_op_set_label, label_arg(c->labels[c->prog->len]), 0);
   }
-  if (c->cur_oargs && c->is_tagging) {
-    TCGTemp *temp = arg_temp(c->cur_outputs[0]);
-    if ((c->allocated_regs & 1) != 0) {
-      if (!temp->tag) {
-        TCGv_i64 tag = tcg_temp_local_new_i64();
-        temp->tag = tcgv_i64_temp(tag);
-        temp->tag->state = 0;
-        temp->tag->state_ptr = NULL;
-      }
-      insert_unary_before(c, INDEX_op_mov_i64, temp_arg(temp->tag), tcgv_i64_arg(c->regs[0]));
-    } else {
-      temp->tag = NULL;
-    }
-  }
 
   c->allocated_regs = 0;
   c->allocated_words = 0;
@@ -537,9 +572,8 @@ static inline void instrument_one_insn(InstrumentationContext *c)
 
 static void preload_tag(InstrumentationContext *c, TCGTemp *temp)
 {
-  c->is_tagging = true;
-  c->prog = inst->tagging_progs + INDEX_op_ld_i64;
-  if (c->prog) {
+  if (needs_tags && inst->progs[INDEX_op_ld_i64].data) {
+    c->prog = inst->progs + INDEX_op_ld_i64;
     TCGArg addr_arg = temp_arg(temp->mem_base);
     TCGArg res_arg = temp_arg(temp);
     TCGArg off_arg = temp->mem_offset;
@@ -553,9 +587,8 @@ static void preload_tag(InstrumentationContext *c, TCGTemp *temp)
 
 static void save_tag(InstrumentationContext *c, TCGTemp *temp)
 {
-  c->is_tagging = true;
-  c->prog = inst->tagging_progs + INDEX_op_st_i64;
-  if (c->prog) {
+  if (needs_tags && inst->progs[INDEX_op_st_i64].data) {
+    c->prog = inst->progs + INDEX_op_st_i64;
     TCGArg inputs[2] = {temp_arg(temp), temp_arg(temp->mem_base)};
     TCGArg off_arg = temp->mem_offset;
     fill_opc(c, INDEX_op_st_i64);
@@ -669,6 +702,21 @@ static void localize_insn_range(TCGOp *begin, TCGOp *end, uint *counter)
   }
 }
 
+static bool instrument_qemu_op(InstrumentationContext *ctx, TCGOpcode opc)
+{
+  bool result = false;
+  switch (opc) {
+  default:
+    if (inst->progs[opc].data) {
+      ctx->prog = inst->progs + opc;
+      instrument_one_insn(ctx);
+      result = !!(inst->progs[opc].required_features & REQUIRES_LOCALIZATION);
+    }
+  }
+
+  return result;
+}
+
 void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64_t flags)
 {
   static __thread InstrumentationContext ctx;
@@ -708,8 +756,9 @@ void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64
         localize_insn_range(last_insn_start, op, &counter);
       if (inst->event_qemu_pc) {
         uint64_t res = inst->event_qemu_pc(op->args[0]);
-        if (res)
-          instrument_gen_call(&ctx, &res);
+        if (res) {
+          instrument_gen_call(&ctx, res);
+        }
       }
 
       need_localize_insn = false;
@@ -732,28 +781,7 @@ void tcg_instrument(TCGContext *s, target_ulong pc, target_ulong cs_base, uint64
       ctx.cur_outputs = op->args;
       ctx.cur_inputs = op->args + ctx.cur_oargs;
       ctx.cur_consts = op->args + ctx.cur_oargs + ctx.cur_iargs;
-      if (inst->tracing_progs[opc].data) {
-        ctx.is_tagging = false;
-        ctx.prog = inst->tracing_progs + opc;
-        instrument_one_insn(&ctx);
-        need_localize_insn |= inst->tracing_progs[opc].requires_localization;
-      }
-      if (inst->tagging_progs[opc].data) {
-        ctx.is_tagging = true;
-        ctx.prog = inst->tagging_progs + opc;
-        instrument_one_insn(&ctx);
-        need_localize_insn |= inst->tagging_progs[opc].requires_localization;
-      } else {
-        for (int i = 0; i < ctx.cur_iargs; ++i) {
-          if (inst->event_drop_tag && arg_temp(ctx.cur_inputs[i])->tag)
-            instrument_gen_drop_tag(&ctx, arg_temp(ctx.cur_inputs[i])->tag);
-        }
-        for (int i = 0; i < ctx.cur_oargs; ++i) {
-          if (ctx.cur_outputs[i] != TCG_CALL_DUMMY_ARG) {
-            arg_temp(ctx.cur_outputs[i])->tag = NULL;
-          }
-        }
-      }
+      need_localize_insn |= instrument_qemu_op(&ctx, opc);
     }
   }
 

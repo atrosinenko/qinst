@@ -39,19 +39,25 @@
 
 #define MAX_OPS_PER_BPF_FUNCTION 1024
 
+#define PROG_ARRAY_SIZE 256
+
 int instrumentation_verbose(void);
 
 #define INST_TRACE(fmt, ...) { if (instrumentation_verbose()) { fprintf(stderr, (fmt), __VA_ARGS__); } }
 
 #define CHECK_THAT(expr) if (!(expr)) { fprintf(stderr, "Check [" stringify(expr) "] failed.\n"); exit(1); }
 
+#define REQUIRES_LOCALIZATION 1
+#define CAN_SET_TAG 2
+typedef uint64_t instrumenter_features_t;
+
 struct InstrumentationContext;
 typedef struct {
   const char *name;
-  void *user_data;
+  uint64_t user_data;
 #define ABORT_CURRENT_INSTRUMENTER 1
-  uint64_t (*gen_function)(struct InstrumentationContext *c, void *user_data);
-  int requires_localization;
+  uint64_t (*gen_function)(struct InstrumentationContext *c, uint64_t user_data);
+  instrumenter_features_t required_features;
 } CallbackDef;
 
 extern CallbackDef callback_defs[];
@@ -67,7 +73,7 @@ typedef struct {
 typedef struct {
   ebpf_op *data;
   size_t len;
-  bool requires_localization;
+  instrumenter_features_t required_features;
 } bpf_prog;
 
 struct BpfInstrumentation;
@@ -85,8 +91,8 @@ typedef struct BpfInstrumentation {
   Elf64_Shdr **section_headers;
 
   // loaded instrumenters
-  bpf_prog tracing_progs[256];
-  bpf_prog tagging_progs[256];
+  bpf_prog progs[PROG_ARRAY_SIZE];
+  bool needs_tags;
   //  loaded event handlers
   uint64_t (*event_dispatch_slow_call)(uint64_t arg);
   void (*event_drop_tag)(uint64_t tag, uint32_t opcode);
