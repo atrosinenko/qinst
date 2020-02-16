@@ -29,7 +29,7 @@
 #include <stdint.h>
 #include <elf.h>
 
-// Hack for older versions elf.h
+// Hack for older versions of elf.h
 #ifndef R_BPF_64_64
 # define R_BPF_64_64 1
 #endif
@@ -82,6 +82,7 @@ typedef struct BpfInstrumentation {
   size_t symtab_entsize;
   const char *strtab;
   uint8_t **sections;
+  Elf64_Shdr **section_headers;
 
   // loaded instrumenters
   bpf_prog tracing_progs[256];

@@ -126,12 +126,14 @@ static Elf64_Ehdr *check_header(uint8_t *data)
 
 static void create_sections(BpfInstrumentation *inst, uint8_t *data)
 {
-  inst->sections = calloc(inst->header->e_shnum, sizeof(uint8_t *));
+  inst->sections        = calloc(inst->header->e_shnum, sizeof(uint8_t *));
+  inst->section_headers = calloc(inst->header->e_shnum, sizeof(Elf64_Shdr *));
   CHECK_THAT(inst->sections != NULL);
   inst->symtab_entsize = sizeof(Elf64_Sym);
 
   for (int i = 0; i < inst->header->e_shnum; ++i) {
     Elf64_Shdr *section_header = (Elf64_Shdr *)(data + inst->header->e_shoff + inst->header->e_shentsize * i);
+    inst->section_headers[i] = section_header;
 
     // Not respecting READ / WRITE permissions for now -- always rw-
     if (section_header->sh_type == SHT_NOBITS)
@@ -189,6 +191,10 @@ static void perform_relocation(BpfInstrumentation *inst, uint8_t *data)
 
         uint32_t *low = (uint32_t *)(inst->sections[section_header->sh_info] + rel->r_offset + 4);
         uint32_t *high = low + 2;
+
+        if ((inst->section_headers[section_header->sh_info]->sh_flags & SHF_EXECINSTR) == 0) {
+          continue;
+        }
 
         if (ELF64_R_TYPE(rel->r_info) == R_BPF_64_64) {
           // TODO What with big endian?
