@@ -305,9 +305,13 @@ static void analyze_progs(BpfInstrumentation *inst)
 
     INST_TRACE("Found instrumenter for %s, %ld insns%s%s\n",
             tcg_op_defs[qopc].name, prog->len,
-            (prog->required_features & REQUIRES_LOCALIZATION) ? ", requires localization" : "",
-            (prog->required_features & CAN_SET_TAG) ? ", can set tags" : "");
+            (features & REQUIRES_LOCALIZATION) ? ", requires localization" : "",
+            (features & CAN_SET_TAG) ? ", can set tags" : "");
     CHECK_THAT(prog->len < MAX_OPS_PER_BPF_FUNCTION);
+    if ((features & CAN_SET_TAG) && tcg_op_defs[qopc].nb_oargs == 0) {
+      fprintf(stderr, "Error: instrumenter for void %s requests setting tags.\n", tcg_op_defs[qopc].name);
+      exit(1);
+    }
   }
   inst->needs_tags = !!(total_features & CAN_SET_TAG);
   if (!inst->needs_tags) {
